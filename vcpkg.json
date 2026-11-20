@@ -16,7 +16,7 @@
       ]
     }
   ],
-  "builtin-baseline": "d07689ef165f033de5c0710e4f67c193a85373e1",
+  "builtin-baseline": "9d764a2d1be71c010cc4fc246de6b3b1d1787ef0",
   "vcpkg-configuration": {
     "overlay-ports": [
       "./vcpkg/ports"
