@@ -198,31 +198,47 @@ jobs:
         run: ctest --test-dir build --output-on-failure
 
   release:
+    # Publishes a release when main reaches a version (project(VERSION) in CMakeLists.txt)
+    # that has notes in docs/release-notes/v<version>.md and no GitHub release yet.
     name: Publish GitHub release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     needs: [windows, linux]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v5
 
-      - name: Check that the tag matches the project version
+      - name: Decide whether to release
+        id: plan
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          grep -q "VERSION ${VERSION}$" CMakeLists.txt || { echo "::error::Tag ${GITHUB_REF_NAME} does not match project(VERSION) in CMakeLists.txt"; exit 1; }
-          test -f "docs/release-notes/${GITHUB_REF_NAME}.md" || { echo "::error::Missing docs/release-notes/${GITHUB_REF_NAME}.md"; exit 1; }
+          VERSION=$(sed -nE 's/^ *VERSION ([0-9]+\.[0-9]+\.[0-9]+)$/\1/p' CMakeLists.txt | head -1)
+          TAG="v${VERSION}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if [ ! -f "docs/release-notes/${TAG}.md" ]; then
+            echo "No release notes for ${TAG}; nothing to publish."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          elif gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/download-artifact@v4
+        if: steps.plan.outputs.publish == 'true'
         with:
           name: Lightcord-windows-x64
           path: package
 
       - name: Create ZIP and checksum
+        if: steps.plan.outputs.publish == 'true'
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          DIR="Lightcord-${VERSION}"
-          ZIP="Lightcord-${VERSION}-windows-x64.zip"
+          DIR="Lightcord-${{ steps.plan.outputs.version }}"
+          ZIP="${DIR}-windows-x64.zip"
           mv package "$DIR"
           zip -qr9 "$ZIP" "$DIR"
           sha256sum "$ZIP" > "$ZIP.sha256"
@@ -230,12 +246,14 @@ jobs:
           echo "ZIP=$ZIP" >> "$GITHUB_ENV"
 
       - name: Publish release
-        env:
-          GH_TOKEN: ${{ github.token }}
+        if: steps.plan.outputs.publish == 'true'
         run: |
+          TAG="${{ steps.plan.outputs.tag }}"
           PRERELEASE=""
-          case "$GITHUB_REF_NAME" in v0.*|*-alpha*|*-beta*|*-rc*) PRERELEASE="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" "$ZIP" "$ZIP.sha256" \
-            --title "Lightcord ${GITHUB_REF_NAME#v}" \
-            --notes-file "docs/release-notes/${GITHUB_REF_NAME}.md" \
-            --verify-tag $PRERELEASE
+          case "$TAG" in v0.*|*-alpha*|*-beta*|*-rc*) PRERELEASE="--prerelease" ;; esac
+          gh release create "$TAG" "$ZIP" "$ZIP.sha256" \
+            --target "$GITHUB_SHA" \
+            --title "Lightcord ${{ steps.plan.outputs.version }}" \
+            --notes-file "docs/release-notes/${TAG}.md" \
+            $PRERELEASE
+          echo "::notice::Published $(gh release view "$TAG" --json url --jq .url)"
