@@ -27,6 +27,7 @@
 #include <QTextBrowser>
 #include <QToolButton>
 #include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -249,21 +250,20 @@ void MainWindow::buildUi()
             statusBar()->showMessage(reason, 5000);
     });
 
-    // Voice signalling
-    connect(m_voice, &VoiceSession::stateChanged, this, [this](VoiceSession::State s) {
-        if (s == VoiceSession::State::Idle) {
-            m_voiceBar->setVoiceChannel(QString());
-            return;
-        }
-        const Channel *c = m_session->channel(m_voice->channelId());
-        m_voiceBar->setVoiceChannel(c ? c->name : tr("Voice"));
+    // Voice
+    connect(m_voice, &VoiceSession::stateChanged, this, [this](VoiceSession::State) { updateVoicePanel(); });
+    connect(m_voice, &VoiceSession::statusText, this, [this](const QString &text) {
+        m_voiceStatus = text;
+        updateVoicePanel();
     });
-    connect(m_voice, &VoiceSession::transportInfoReady, this, [this](const VoiceSession::TransportInfo &info) {
-        statusBar()->showMessage(
-            tr("Voice server assigned (%1). Audio transport with DAVE encryption arrives in Lightcord 0.2.")
-                .arg(info.endpoint),
-            8000);
+    connect(m_voice, &VoiceSession::encryptionChanged, this, [this](int version, const QString &mode) {
+        m_daveVersion = version;
+        m_transportMode = mode;
+        updateVoicePanel();
     });
+    connect(m_voice, &VoiceSession::speakingChanged, this, &MainWindow::onSpeakingChanged);
+    connect(m_voice, &VoiceSession::errorOccurred, this,
+            [this](const QString &message) { statusBar()->showMessage(message, 10000); });
 
     onThemeChanged();
     updateHeader();
@@ -304,6 +304,7 @@ void MainWindow::connectSession()
             renderMessages();
     });
     connect(m_session, &Session::voiceStateUpdate, m_voice, &VoiceSession::handleVoiceStateUpdate);
+    connect(m_session, &Session::voiceMembersChanged, this, &MainWindow::scheduleTreeRebuild);
     connect(m_session, &Session::voiceServerUpdate, m_voice, &VoiceSession::handleVoiceServerUpdate);
 }
 
@@ -385,6 +386,23 @@ QTreeWidgetItem *MainWindow::addChannelItem(QTreeWidgetItem *parent, const Chann
     }
     if (c.id == m_currentChannel)
         m_tree->setCurrentItem(item);
+
+    if (c.isVoice()) {
+        const QStringList members = m_session->voiceMembers(c.id);
+        for (const QString &uid : members) {
+            auto *member = new QTreeWidgetItem(item);
+            const QString name = m_session->userDisplayName(uid);
+            member->setText(0, name.isEmpty() ? tr("Unknown user") : name);
+            member->setData(0, IdRole, uid);
+            member->setData(0, KindRole, KindVoiceMember);
+            const bool speaking = m_speaking.contains(uid);
+            member->setForeground(0, speaking ? Theme::palette().accent : Theme::palette().textMuted);
+            member->setIcon(0, Theme::icon(speaking ? "waves" : "mic",
+                                           speaking ? Theme::palette().accent : Theme::palette().textMuted));
+        }
+        if (!members.isEmpty())
+            item->setExpanded(true);
+    }
     return item;
 }
 
@@ -541,7 +559,7 @@ void MainWindow::onItemActivated(QTreeWidgetItem *item)
         openChannel(id);
         break;
     case KindVoice:
-        statusBar()->showMessage(tr("Double-click a voice channel to join it."), 3000);
+        statusBar()->showMessage(tr("Double-click a voice channel to join it (double-click again to leave)."), 3000);
         break;
     default:
         break;
@@ -667,18 +685,60 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 
 void MainWindow::joinVoice(const Channel &c)
 {
-    if (!Settings::instance().experimentalVoiceSignaling()) {
-        statusBar()->showMessage(tr("Voice chat (with Discord's DAVE end-to-end encryption) is coming in Lightcord "
-                                    "0.2. You can test the signalling in Settings › Advanced."),
-                                 8000);
-        return;
-    }
-    if (m_voice->channelId() == c.id) {
+    if (m_voice->state() != VoiceSession::State::Idle && m_voice->channelId() == c.id) {
         m_voice->leave();
         return;
     }
+    if (!VoiceSession::isMediaAvailable()) {
+        statusBar()->showMessage(tr("This build of Lightcord was compiled without voice support."), 8000);
+        return;
+    }
+    m_voiceStatus.clear();
+    m_daveVersion = 0;
+    m_transportMode.clear();
     m_voice->join(c.guildId, c.id, m_session->me().id);
-    statusBar()->showMessage(tr("Joining %1 (signalling only)…").arg(c.name), 4000);
+    statusBar()->showMessage(tr("Joining %1…").arg(c.name), 4000);
+}
+
+void MainWindow::updateVoicePanel()
+{
+    const VoiceSession::State state = m_voice->state();
+    if (state == VoiceSession::State::Idle) {
+        m_voiceBar->setVoiceStatus(QString(), QString(), QString());
+        return;
+    }
+    const Channel *c = m_session->channel(m_voice->channelId());
+    const QString name = c ? c->name : tr("Voice channel");
+
+    QString status;
+    QString security;
+    if (state == VoiceSession::State::Connected) {
+        status = m_voiceStatus.isEmpty() ? tr("Voice connected") : m_voiceStatus;
+        if (m_daveVersion > 0)
+            security = tr("🔒 End-to-end encrypted (DAVE v%1)").arg(m_daveVersion);
+        else
+            security = tr("Securing the call…");
+    } else {
+        status = m_voiceStatus.isEmpty() ? tr("Connecting…") : m_voiceStatus;
+    }
+    m_voiceBar->setVoiceStatus(name, status, security);
+}
+
+void MainWindow::onSpeakingChanged(const QString &userId, bool speaking)
+{
+    if (speaking)
+        m_speaking.insert(userId);
+    else
+        m_speaking.remove(userId);
+
+    const ThemePalette &p = Theme::palette();
+    for (QTreeWidgetItemIterator it(m_tree); *it; ++it) {
+        QTreeWidgetItem *item = *it;
+        if (item->data(0, KindRole).toInt() == KindVoiceMember && item->data(0, IdRole).toString() == userId) {
+            item->setForeground(0, speaking ? p.accent : p.textMuted);
+            item->setIcon(0, Theme::icon(speaking ? "waves" : "mic", speaking ? p.accent : p.textMuted));
+        }
+    }
 }
 
 void MainWindow::startScreenShare()

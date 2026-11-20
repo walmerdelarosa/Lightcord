@@ -61,9 +61,8 @@ ScreenShareDialog::ScreenShareDialog(QWidget *parent)
     options->addWidget(refresh);
     v->addLayout(options);
 
-    auto *note = new QLabel(tr("Preview mode: other people will be able to watch once the voice engine ships "
-                               "in Lightcord 0.2. For now the capture runs locally so you can check quality and "
-                               "CPU usage."),
+    auto *note = new QLabel(tr("Preview mode: streaming to other people (Go Live) is planned for Lightcord 0.3. "
+                               "For now the capture runs locally so you can check quality and CPU usage."),
                             this);
     note->setObjectName("Muted");
     note->setWordWrap(true);

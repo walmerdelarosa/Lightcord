@@ -41,7 +41,7 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
-    enum ItemKind { KindFolder = 0, KindText = 1, KindVoice = 2, KindCategory = 3 };
+    enum ItemKind { KindFolder = 0, KindText = 1, KindVoice = 2, KindCategory = 3, KindVoiceMember = 4 };
     enum ItemRole { IdRole = Qt::UserRole + 1, KindRole, GuildRole };
 
     void buildUi();
@@ -66,6 +66,8 @@ private:
     void stopScreenShare(const QString &reason = QString());
     void openSettings();
     void onThemeChanged();
+    void updateVoicePanel();
+    void onSpeakingChanged(const QString &userId, bool speaking);
 
     Session *m_session = nullptr;
     VoiceSession *m_voice = nullptr;
@@ -93,6 +95,11 @@ private:
     Snowflake m_restoreChannel;
     bool m_bootstrapped = false;
     bool m_loginOpen = false;
+
+    QString m_voiceStatus;
+    int m_daveVersion = 0;
+    QString m_transportMode;
+    QSet<QString> m_speaking;
 };
 
 } // namespace lightcord

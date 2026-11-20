@@ -22,7 +22,8 @@ public:
     void setNoiseSuppression(bool enabled);
     void setSharing(bool sharing, const QString &title = QString());
     void setSharePreview(const QImage &frame, double fps);
-    void setVoiceChannel(const QString &channelName); // empty = not in voice
+    // Voice connection panel. Empty channel name hides it.
+    void setVoiceStatus(const QString &channelName, const QString &status, const QString &security);
     void refreshIcons();
 
 signals:

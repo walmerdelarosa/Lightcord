@@ -7,6 +7,7 @@
 
 #include <QHash>
 #include <QObject>
+#include <QStringList>
 #include <QVector>
 
 namespace lightcord {
@@ -38,6 +39,9 @@ public:
     bool canView(const Channel &channel) const;
     bool canSend(const Channel &channel) const;
 
+    // Users currently connected to a voice channel (from the guilds' voice states).
+    QStringList voiceMembers(const Snowflake &channelId) const;
+
     const QVector<Message> &messages(const Snowflake &channelId) const;
     bool hasLoadedMessages(const Snowflake &channelId) const;
     void loadMessages(const Snowflake &channelId);
@@ -57,6 +61,7 @@ signals:
     void authenticationFailed(const QString &reason);
     void errorOccurred(const QString &message);
     void voiceStateUpdate(const QJsonObject &data);
+    void voiceMembersChanged();
     void voiceServerUpdate(const QJsonObject &data);
 
 private:
@@ -67,6 +72,7 @@ private:
     void removeChannel(const Snowflake &channelId, const Snowflake &guildId);
     Guild *mutableGuild(const Snowflake &id);
     void rememberUser(const User &u);
+    void applyVoiceState(const QJsonObject &state, const Snowflake &guildId);
 
     DiscordRest m_rest;
     Gateway m_gateway;
@@ -79,6 +85,7 @@ private:
     QHash<Snowflake, User> m_users;
     QHash<Snowflake, QVector<Message>> m_messages;
     QHash<Snowflake, bool> m_loadedChannels;
+    QHash<Snowflake, Snowflake> m_voiceChannelOfUser; // user id -> voice channel id
 };
 
 } // namespace lightcord

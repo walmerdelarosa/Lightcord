@@ -1,9 +1,9 @@
 # Lightcord architecture
 
-Lightcord is a single Qt Widgets application. Everything runs on the GUI thread except what Qt
-itself runs in the background (network I/O and audio devices). Keeping one thread keeps the code
-simple and the memory footprint small, and none of the current work is CPU-heavy. The noise
-suppressor processes 10 ms frames in well under 1 ms.
+Lightcord is a single Qt Widgets application. The UI, the main gateway and text chat run on the GUI
+thread. A call runs in a dedicated voice thread, so that a busy UI (for example, a large READY payload
+or a long channel) never makes audio stutter. The noise suppressor processes 10 ms frames in well
+under 1 ms.
 
 ```
                     ┌──────────────────────────── ui/ ────────────────────────────┐
@@ -62,9 +62,32 @@ the measured FPS is shown in the preview.
 
 ### `voice/`
 
-`VoiceSession` implements the first half of joining a voice channel: it sends gateway opcode 4 and
-collects `VOICE_STATE_UPDATE` (session id) and `VOICE_SERVER_UPDATE` (endpoint and token) into a
-`TransportInfo`. The second half, the media transport, is described in the [roadmap](ROADMAP.md).
+Voice is split into a Qt-free core (unit-tested offline) and a thin Qt layer.
+
+```
+ main gateway (op 4) ──► VOICE_STATE_UPDATE + VOICE_SERVER_UPDATE ──► VoiceSession (GUI thread)
+                                                                           │ queued calls
+                                                         ┌─────────────────▼──────────────────┐
+                                                         │ VoiceEngine (own QThread)           │
+  mic ─► AudioPipeline (RNNoise, gate) ─► 20 ms frames ─►│ Opus ─► DAVE encrypt ─► RTP + AEAD ─┼─► UDP
+  speakers ◄─ PlaybackMixer ◄─ jitter buffers ◄─ Opus ◄─ │ DAVE decrypt ◄─ AEAD ◄─ RTP parse ◄─┼── UDP
+                                                         │ VoiceGateway (v8, JSON + binary)    │
+                                                         └────────────────────────────────────┘
+```
+
+| Class | Responsibility |
+| --- | --- |
+| `VoiceSession` | GUI-side entry point. Sends gateway opcode 4 to join and leave, waits for both `VOICE_STATE_UPDATE` (session id) and `VOICE_SERVER_UPDATE` (endpoint, token), then starts the `VoiceEngine` in its own thread and relays its status to the UI. Handles being moved or disconnected by others. |
+| `VoiceGateway` | Voice WebSocket, version 8: IDENTIFY (with `max_dave_protocol_version`), heartbeats with `seq_ack`, buffered RESUME, READY, SESSION_DESCRIPTION, SPEAKING, client connect/disconnect, and the DAVE opcodes, including binary frames (`[seq:u16][op:u8][payload]`). |
+| `VoiceEngine` | Owns the UDP socket, IP discovery and keep-alives, transport crypto, the `DaveSession`, the Opus encoder and decoders, capture and playback. Decides when you are speaking (voice gate or energy detector with hold), sends opcode 5 before audio and five silence frames after it, and never sends media unencrypted while DAVE keys are pending. |
+| `core/DaveSession` | DAVE state machine over libdave's C API, mirroring Discord's reference session manager: external sender, key packages, proposals → commit/welcome, commit and welcome processing, protocol transitions (opcodes 21–31), and installation of per-sender key ratchets on the encryptor and per-user decryptors. Does no I/O, which makes it testable. |
+| `core/TransportCrypto` | `aead_aes256_gcm_rtpsize` (OpenSSL) and `aead_xchacha20_poly1305_rtpsize` (libsodium): RTP header as AAD, 32-bit big-endian nonce counter appended to the packet, RTP extension body stripped after decryption. |
+| `core/Rtp`, `core/IpDiscovery`, `core/OpusCodec` | Packet formats and the Opus wrappers (stereo, 48 kHz, 20 ms, in-band FEC). |
+| `audio/PlaybackMixer` | Pull-mode `QIODevice` feeding `QAudioSink`: one jitter buffer per SSRC (playback starts at 40 ms, capped at 200 ms), mixing, resampling to the device format. |
+
+`tests/test_voice_core.cpp` runs an offline DAVE handshake between two `DaveSession`s, with libdave's test
+"external sender" playing the voice gateway, and checks that each client decrypts the other's frames
+while an outsider cannot.
 
 ### `ui/`
 

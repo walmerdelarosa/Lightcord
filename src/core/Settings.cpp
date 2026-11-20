@@ -41,6 +41,7 @@ QByteArray Settings::inputDeviceId() const
 void Settings::setInputDeviceId(const QByteArray &id)
 {
     QSettings().setValue("audio/inputDevice", id);
+    emit audioDevicesChanged();
 }
 
 QByteArray Settings::outputDeviceId() const
@@ -51,6 +52,7 @@ QByteArray Settings::outputDeviceId() const
 void Settings::setOutputDeviceId(const QByteArray &id)
 {
     QSettings().setValue("audio/outputDevice", id);
+    emit audioDevicesChanged();
 }
 
 audio::NoiseSuppressor::Settings Settings::noiseSuppression() const
@@ -94,16 +96,6 @@ int Settings::screenShareMaxHeight() const
 void Settings::setScreenShareMaxHeight(int px)
 {
     QSettings().setValue("screenshare/maxHeight", px);
-}
-
-bool Settings::experimentalVoiceSignaling() const
-{
-    return QSettings().value("voice/experimentalSignaling", false).toBool();
-}
-
-void Settings::setExperimentalVoiceSignaling(bool on)
-{
-    QSettings().setValue("voice/experimentalSignaling", on);
 }
 
 QByteArray Settings::windowGeometry() const

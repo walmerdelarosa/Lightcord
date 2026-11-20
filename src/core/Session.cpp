@@ -71,6 +71,7 @@ void Session::stop()
     m_users.clear();
     m_messages.clear();
     m_loadedChannels.clear();
+    m_voiceChannelOfUser.clear();
 }
 
 const Guild *Session::guild(const Snowflake &id) const
@@ -150,6 +151,35 @@ bool Session::canSend(const Channel &c) const
     if (!g || !g->myRolesKnown)
         return true;
     return computeChannelPermissions(*g, c, m_me.id) & Permissions::SendMessages;
+}
+
+QStringList Session::voiceMembers(const Snowflake &channelId) const
+{
+    QStringList ids;
+    for (auto it = m_voiceChannelOfUser.cbegin(); it != m_voiceChannelOfUser.cend(); ++it) {
+        if (it.value() == channelId)
+            ids << it.key();
+    }
+    std::sort(ids.begin(), ids.end(), [this](const QString &a, const QString &b) {
+        return userDisplayName(a).compare(userDisplayName(b), Qt::CaseInsensitive) < 0;
+    });
+    return ids;
+}
+
+void Session::applyVoiceState(const QJsonObject &state, const Snowflake &guildId)
+{
+    Q_UNUSED(guildId);
+    const QJsonObject member = state.value("member").toObject();
+    if (!member.isEmpty())
+        rememberUser(User::fromJson(member.value("user").toObject()));
+    const Snowflake userId = state.value("user_id").toString();
+    if (userId.isEmpty())
+        return;
+    const QJsonValue channel = state.value("channel_id");
+    if (channel.isNull() || channel.toString().isEmpty())
+        m_voiceChannelOfUser.remove(userId);
+    else
+        m_voiceChannelOfUser.insert(userId, channel.toString());
 }
 
 const QVector<Message> &Session::messages(const Snowflake &channelId) const
@@ -298,6 +328,8 @@ void Session::handleReady(const QJsonObject &data)
                 g.myRolesKnown = true;
             }
         }
+        for (const QJsonValue &vs : go.value("voice_states").toArray())
+            applyVoiceState(vs.toObject(), g.id);
         m_guilds.push_back(g);
     }
 
@@ -329,6 +361,8 @@ void Session::onDispatch(const QString &event, const QJsonObject &data)
                 g.myRolesKnown = true;
             }
         }
+        for (const QJsonValue &vs : data.value("voice_states").toArray())
+            applyVoiceState(vs.toObject(), g.id);
         upsertGuild(g);
         emit guildsChanged();
     } else if (event == QLatin1String("GUILD_DELETE")) {
@@ -380,7 +414,9 @@ void Session::onDispatch(const QString &event, const QJsonObject &data)
                    list.end());
         emit messageDeleted(channelId, id);
     } else if (event == QLatin1String("VOICE_STATE_UPDATE")) {
+        applyVoiceState(data, data.value("guild_id").toString());
         emit voiceStateUpdate(data);
+        emit voiceMembersChanged();
     } else if (event == QLatin1String("VOICE_SERVER_UPDATE")) {
         emit voiceServerUpdate(data);
     }

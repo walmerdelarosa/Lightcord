@@ -1,0 +1,25 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "lightcord",
+  "version-string": "0.2.0",
+  "description": "Lightweight native Discord client - voice dependencies",
+  "license": "MIT",
+  "dependencies": [
+    "libsodium",
+    "nlohmann-json",
+    "openssl",
+    "opus",
+    {
+      "name": "mlspp",
+      "features": [
+        "openssl"
+      ]
+    }
+  ],
+  "builtin-baseline": "d07689ef165f033de5c0710e4f67c193a85373e1",
+  "vcpkg-configuration": {
+    "overlay-ports": [
+      "./vcpkg/ports"
+    ]
+  }
+}

@@ -60,6 +60,7 @@ VoiceBar::VoiceBar(QWidget *parent)
     m_voiceLabel = new QLabel(m_voicePanel);
     m_voiceLabel->setObjectName("UserStatus");
     m_voiceLabel->setWordWrap(true);
+    m_voiceLabel->setTextFormat(Qt::RichText);
     m_leaveButton = makeButton(tr("Leave voice channel"), false);
     vr->addWidget(m_voiceLabel, 1);
     vr->addWidget(m_leaveButton);
@@ -209,10 +210,19 @@ void VoiceBar::setSharePreview(const QImage &frame, double fps)
     m_previewFps->setText(tr("%1 fps · %2p").arg(fps, 0, 'f', 0).arg(frame.height()));
 }
 
-void VoiceBar::setVoiceChannel(const QString &channelName)
+void VoiceBar::setVoiceStatus(const QString &channelName, const QString &status, const QString &security)
 {
     m_voicePanel->setVisible(!channelName.isEmpty());
-    m_voiceLabel->setText(tr("🔊 %1 — signalling only (no audio yet)").arg(channelName));
+    if (channelName.isEmpty())
+        return;
+    const ThemePalette &p = Theme::palette();
+    QString html = QStringLiteral("<span style=\"color:%1; font-weight:600;\">%2</span>")
+                       .arg(p.success.name(), status.toHtmlEscaped());
+    html += QStringLiteral("<br><span style=\"color:%1;\">🔊 %2</span>")
+                .arg(p.textStrong.name(), channelName.toHtmlEscaped());
+    if (!security.isEmpty())
+        html += QStringLiteral("<br><span style=\"color:%1;\">%2</span>").arg(p.textMuted.name(), security.toHtmlEscaped());
+    m_voiceLabel->setText(html);
 }
 
 } // namespace lightcord

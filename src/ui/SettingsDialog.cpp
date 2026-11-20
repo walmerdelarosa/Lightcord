@@ -312,8 +312,8 @@ QWidget *SettingsDialog::buildScreenShareTab()
     res->setCurrentIndex(qMax(0, res->findData(Settings::instance().screenShareMaxHeight())));
     form->addRow(tr("Resolution"), res);
 
-    form->addRow(mutedLabel(tr("Lower values use less CPU. Streaming to other people (Go Live) arrives together "
-                               "with the voice engine in Lightcord 0.2; until then sharing shows a local preview."),
+    form->addRow(mutedLabel(tr("Lower values use less CPU. Streaming your screen to other people (Go Live) is planned "
+                               "for Lightcord 0.3; until then sharing shows a local preview."),
                             page));
 
     connect(fps, &QComboBox::currentIndexChanged, this,
@@ -330,14 +330,9 @@ QWidget *SettingsDialog::buildAdvancedTab()
     v->setContentsMargins(16, 16, 16, 16);
     v->setSpacing(10);
 
-    auto *voice = new QCheckBox(tr("Experimental voice signalling"), page);
-    voice->setChecked(Settings::instance().experimentalVoiceSignaling());
-    v->addWidget(voice);
-    v->addWidget(mutedLabel(tr("Lets you join voice channels to test the signalling handshake. No audio is sent "
-                               "or received yet, and other people will see you in the channel."),
+    v->addWidget(mutedLabel(tr("Voice calls use Discord's DAVE end-to-end encryption: audio is encrypted on "
+                               "your computer and can only be decrypted by the people in the call."),
                             page));
-    connect(voice, &QCheckBox::toggled, this, [](bool on) { Settings::instance().setExperimentalVoiceSignaling(on); });
-
     v->addSpacing(16);
     auto *logout = new QPushButton(Theme::icon("logout", Theme::palette().danger), tr("Log out and forget token"), page);
     logout->setObjectName("Danger");
@@ -348,7 +343,7 @@ QWidget *SettingsDialog::buildAdvancedTab()
     });
 
     v->addStretch();
-    v->addWidget(mutedLabel(tr("Lightcord %1 · MIT License · Noise suppression by RNNoise (BSD-3-Clause)")
+    v->addWidget(mutedLabel(tr("Lightcord %1 · MIT License · RNNoise (BSD-3-Clause) · libdave (MIT) · Opus (BSD) · libsodium (ISC)")
                                 .arg(QStringLiteral(LIGHTCORD_VERSION)),
                             page));
     return page;

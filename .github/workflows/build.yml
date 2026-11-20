@@ -9,10 +9,15 @@ on:
 permissions:
   contents: read
 
+env:
+  VCPKG_COMMIT: d07689ef165f033de5c0710e4f67c193a85373e1
+
 jobs:
   windows:
     name: Windows x64 (MSVC, Qt 6.8)
     runs-on: windows-latest
+    env:
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.vcpkg-cache
     steps:
       - uses: actions/checkout@v5
 
@@ -29,8 +34,37 @@ jobs:
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
+      - name: Restore vcpkg binary cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .vcpkg-cache
+          key: vcpkg-win-static-md-${{ hashFiles('vcpkg.json', 'vcpkg/ports/**') }}
+          restore-keys: vcpkg-win-static-md-
+
+      - name: Set up vcpkg
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force .vcpkg-cache | Out-Null
+          git clone https://github.com/microsoft/vcpkg "$env:RUNNER_TEMP\vcpkg"
+          & "$env:RUNNER_TEMP\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE="$env:RUNNER_TEMP\vcpkg\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static-md > configure.log 2>&1
+          $code = $LASTEXITCODE
+          Get-Content configure.log
+          exit $code
+
+      - name: Save vcpkg binary cache
+        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .vcpkg-cache
+          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
 
       - name: Build
         shell: pwsh
@@ -40,15 +74,21 @@ jobs:
           Get-Content build.log
           exit $code
 
-      - name: Report compiler errors
+      - name: Report errors
         if: failure()
         shell: pwsh
         run: |
-          if (Test-Path build.log) {
-            Select-String -Path build.log -Pattern 'error C\d+|error LNK\d+|fatal error|CMake Error' |
-              Select-Object -First 40 |
-              ForEach-Object { Write-Output ("::error::" + $_.Line.Trim()) }
+          foreach ($log in 'configure.log', 'build.log') {
+            if (Test-Path $log) {
+              Select-String -Path $log -Pattern 'error C\d+|error LNK\d+|fatal error|CMake Error|error:|failed with' |
+                Select-Object -First 40 |
+                ForEach-Object { Write-Output ("::error::" + $_.Line.Trim()) }
+            }
           }
+          Get-ChildItem "$env:RUNNER_TEMP\vcpkg\buildtrees" -Recurse -Filter '*-err.log' -ErrorAction SilentlyContinue |
+            Select-Object -First 3 | ForEach-Object {
+              Get-Content $_.FullName -Tail 15 | ForEach-Object { Write-Output ("::error::vcpkg: " + $_) }
+            }
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
@@ -73,12 +113,15 @@ jobs:
             Get-ChildItem dist -Filter 'av*.dll' | Remove-Item
             Get-ChildItem dist -Filter 'sw*.dll' | Remove-Item
           }
-          Get-ChildItem dist -Recurse -File | Sort-Object Length -Descending | Select-Object -First 12 |
-            ForEach-Object { Write-Output ("{0,8:N1} MB  {1}" -f ($_.Length / 1MB), $_.FullName.Substring($PWD.Path.Length)) }
           Copy-Item LICENSE, README.md dist/
-          Copy-Item third_party/rnnoise/COPYING dist/RNNOISE-LICENSE.txt
+          New-Item -ItemType Directory -Force dist/licenses | Out-Null
+          Copy-Item third_party/rnnoise/COPYING dist/licenses/RNNoise.txt
+          Copy-Item third_party/libdave/LICENSE dist/licenses/libdave.txt
+          foreach ($dep in 'opus', 'libsodium', 'openssl', 'mlspp', 'nlohmann-json') {
+            $c = "build/vcpkg_installed/x64-windows-static-md/share/$dep/copyright"
+            if (Test-Path $c) { Copy-Item $c "dist/licenses/$dep.txt" }
+          }
           $size = (Get-ChildItem dist -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
-          Write-Output ("Package size: {0:N1} MB" -f $size)
           $top = (Get-ChildItem dist -Recurse -File | Sort-Object Length -Descending | Select-Object -First 6 |
             ForEach-Object { "{0} {1:N1}MB" -f $_.Name, ($_.Length / 1MB) }) -join ', '
           Write-Output ("::notice::Windows package size: {0:N1} MB. Largest: {1}" -f $size, $top)
@@ -91,29 +134,58 @@ jobs:
   linux:
     name: Linux (GCC, Qt 6 from Ubuntu)
     runs-on: ubuntu-24.04
+    env:
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg-cache
     steps:
       - uses: actions/checkout@v5
 
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build libgl1-mesa-dev \
+          sudo apt-get install -y --no-install-recommends ninja-build libgl1-mesa-dev pkg-config \
             qt6-base-dev qt6-websockets-dev qt6-multimedia-dev libqt6svg6-dev
 
+      - name: Restore vcpkg binary cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .vcpkg-cache
+          key: vcpkg-linux-${{ hashFiles('vcpkg.json', 'vcpkg/ports/**') }}
+          restore-keys: vcpkg-linux-
+
+      - name: Set up vcpkg
+        run: |
+          mkdir -p .vcpkg-cache
+          git clone https://github.com/microsoft/vcpkg "$RUNNER_TEMP/vcpkg"
+          "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        run: |
+          set -o pipefail
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$RUNNER_TEMP/vcpkg/scripts/buildsystems/vcpkg.cmake" 2>&1 | tee configure.log
+
+      - name: Save vcpkg binary cache
+        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .vcpkg-cache
+          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
 
       - name: Build
         run: |
           set -o pipefail
           cmake --build build 2>&1 | tee build.log
 
-      - name: Report compiler errors
+      - name: Report errors
         if: failure()
         run: |
-          if [ -f build.log ]; then
-            grep -E "error:|undefined reference|CMake Error" build.log | head -40 | sed 's/^/::error::/' || true
-          fi
+          for log in configure.log build.log; do
+            [ -f "$log" ] && grep -E "error:|undefined reference|CMake Error|failed with" "$log" | head -40 | sed 's/^/::error::/' || true
+          done
+          find "$RUNNER_TEMP/vcpkg/buildtrees" -name '*-err.log' 2>/dev/null | head -3 | while read f; do
+            tail -15 "$f" | sed 's/^/::error::vcpkg: /'
+          done
 
       - name: Test
         run: ctest --test-dir build --output-on-failure

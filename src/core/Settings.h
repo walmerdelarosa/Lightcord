@@ -34,9 +34,6 @@ public:
     int screenShareMaxHeight() const;  // 720 | 1080 | 0 (native)
     void setScreenShareMaxHeight(int px);
 
-    bool experimentalVoiceSignaling() const;
-    void setExperimentalVoiceSignaling(bool on);
-
     QByteArray windowGeometry() const;
     void setWindowGeometry(const QByteArray &g);
     QByteArray splitterState() const;
@@ -47,6 +44,7 @@ public:
 signals:
     void themeChanged();
     void noiseSuppressionChanged();
+    void audioDevicesChanged();
 
 private:
     Settings() = default;

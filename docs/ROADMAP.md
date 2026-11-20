@@ -1,6 +1,6 @@
 # Roadmap
 
-## 0.1: Foundations (current, alpha)
+## 0.1: Foundations
 
 - [x] Native Qt 6 / C++17 application with the new Lightcord identity (logo, icons, Night and Day themes)
 - [x] REST client with rate-limit retries
@@ -13,20 +13,24 @@
 - [x] Token storage in the Windows Credential Manager
 - [x] CI builds for Windows (MSVC) and Linux (GCC), with unit tests
 
-## 0.2: Voice
+## 0.2: Voice (current, alpha)
 
 Discord has required **DAVE** (Discord Audio & Video End-to-End Encryption) for every voice and video
 call since March 2026, so a voice engine must implement it to join any call.
 
-- [ ] Voice gateway (WebSocket): identify, heartbeat, `SELECT_PROTOCOL`, session description
-- [ ] UDP socket with IP discovery
-- [ ] Transport encryption (`aead_aes256_gcm_rtpsize` / `aead_xchacha20_poly1305_rtpsize`) via libsodium
-- [ ] **DAVE** integration via [discord/libdave](https://github.com/discord/libdave): MLS group handling,
-      per-sender media frame encryption, and protocol transitions signalled through the voice gateway
-- [ ] Opus encode/decode, jitter buffer, per-user volume
-- [ ] Send path: `AudioPipeline` (with noise suppression) → Opus → DAVE → transport encryption → RTP
-- [ ] Speaking indicators, push-to-talk and voice-activity modes
-- [ ] Voice channel member list in the navigator
+- [x] Voice gateway v8: identify, heartbeat with `seq_ack`, buffered resume, `SELECT_PROTOCOL`, session description
+- [x] UDP socket with IP discovery and keep-alives
+- [x] Transport encryption: `aead_aes256_gcm_rtpsize` (OpenSSL) and `aead_xchacha20_poly1305_rtpsize` (libsodium)
+- [x] **DAVE** through [discord/libdave](https://github.com/discord/libdave): MLS key packages, proposals,
+      commits and welcomes, protocol transitions, per-sender frame encryption/decryption
+- [x] Opus encode/decode (stereo, 48 kHz, 20 ms), packet-loss concealment, per-speaker jitter buffer and mixer
+- [x] Send path with noise suppression and voice gate, speaking state (opcode 5) and trailing silence frames
+- [x] Voice channel members in the navigator, speaking indicators, mute/deafen
+- [x] Offline tests, including a full two-client DAVE handshake
+- [ ] Push-to-talk
+- [ ] Per-user volume and local mute
+- [ ] Calls in DMs and group DMs (ringing)
+- [ ] Verification codes (DAVE pairwise fingerprints) in the UI
 
 ## 0.3: Go Live (screen sharing to others)
 
