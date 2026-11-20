@@ -34,6 +34,16 @@ add_library(rnnoise STATIC
 )
 target_include_directories(rnnoise PUBLIC third_party/rnnoise/include)
 target_compile_definitions(rnnoise PRIVATE _USE_MATH_DEFINES)
+# RNNoise ships private copies of some Opus/CELT functions under the same
+# names as libopus. Rename them so both libraries can be linked statically.
+foreach(sym
+        _celt_autocorr _celt_lpc celt_fir celt_iir celt_pitch_xcorr
+        compute_band_corr compute_band_energy compute_dense compute_gru compute_rnn interp_band_gain
+        opus_fft_alloc opus_fft_alloc_arch_c opus_fft_alloc_twiddles opus_fft_c opus_fft_free
+        opus_fft_free_arch_c opus_fft_impl opus_ifft_c
+        pitch_downsample pitch_filter pitch_search remove_doubling)
+    target_compile_definitions(rnnoise PRIVATE ${sym}=lcrn_${sym})
+endforeach()
 if(MSVC)
     target_compile_options(rnnoise PRIVATE /W0)
 else()
