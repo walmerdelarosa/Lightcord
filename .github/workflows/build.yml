@@ -39,14 +39,16 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .vcpkg-cache
-          key: vcpkg-win-static-md-${{ hashFiles('vcpkg.json', 'vcpkg/ports/**') }}
-          restore-keys: vcpkg-win-static-md-
+          key: vcpkg-pinned-win-static-md-${{ hashFiles('vcpkg.json', 'vcpkg/ports/**') }}
+          restore-keys: vcpkg-pinned-win-static-md-
 
       - name: Set up vcpkg
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force .vcpkg-cache | Out-Null
+          # Pinned so that vcpkg's ABI hashes (and therefore the binary cache) stay stable.
           git clone https://github.com/microsoft/vcpkg "$env:RUNNER_TEMP\vcpkg"
+          git -C "$env:RUNNER_TEMP\vcpkg" checkout --quiet $env:VCPKG_COMMIT
           & "$env:RUNNER_TEMP\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
 
       - name: Configure
@@ -150,13 +152,15 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .vcpkg-cache
-          key: vcpkg-linux-${{ hashFiles('vcpkg.json', 'vcpkg/ports/**') }}
-          restore-keys: vcpkg-linux-
+          key: vcpkg-pinned-linux-${{ hashFiles('vcpkg.json', 'vcpkg/ports/**') }}
+          restore-keys: vcpkg-pinned-linux-
 
       - name: Set up vcpkg
         run: |
           mkdir -p .vcpkg-cache
+          # Pinned so that vcpkg's ABI hashes (and therefore the binary cache) stay stable.
           git clone https://github.com/microsoft/vcpkg "$RUNNER_TEMP/vcpkg"
+          git -C "$RUNNER_TEMP/vcpkg" checkout --quiet "$VCPKG_COMMIT"
           "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
 
       - name: Configure
