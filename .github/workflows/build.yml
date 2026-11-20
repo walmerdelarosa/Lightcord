@@ -14,7 +14,7 @@ jobs:
     name: Windows x64 (MSVC, Qt 6.8)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
@@ -58,18 +58,30 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item build/Lightcord.exe dist/
-          windeployqt --release --no-translations --no-system-d3d-compiler --no-opengl-sw dist/Lightcord.exe
-          # Lightcord uses the native Windows audio backend; drop the FFmpeg backend to stay small.
+          windeployqt --release --no-translations --no-system-d3d-compiler --no-opengl-sw --no-compiler-runtime dist/Lightcord.exe
+          # Ship the three MSVC runtime DLLs instead of the 25 MB vc_redist installer.
+          $crt = Get-ChildItem "$env:VCToolsRedistDir\x64" -Directory -Filter 'Microsoft.VC*.CRT' | Select-Object -First 1
+          foreach ($dll in 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') {
+            Copy-Item (Join-Path $crt.FullName $dll) dist/
+          }
+          # Lightcord renders with the raster engine and uses the native Windows audio
+          # backend: drop the DirectX shader compilers and the FFmpeg backend.
+          Remove-Item -ErrorAction SilentlyContinue dist/dxcompiler.dll, dist/dxil.dll, dist/opengl32sw.dll
+          Remove-Item -ErrorAction SilentlyContinue -Recurse dist/networkinformation, dist/generic
           if (Test-Path dist/multimedia/windowsmediaplugin.dll) {
             Remove-Item -ErrorAction SilentlyContinue dist/multimedia/ffmpegmediaplugin.dll
             Get-ChildItem dist -Filter 'av*.dll' | Remove-Item
             Get-ChildItem dist -Filter 'sw*.dll' | Remove-Item
           }
+          Get-ChildItem dist -Recurse -File | Sort-Object Length -Descending | Select-Object -First 12 |
+            ForEach-Object { Write-Output ("{0,8:N1} MB  {1}" -f ($_.Length / 1MB), $_.FullName.Substring($PWD.Path.Length)) }
           Copy-Item LICENSE, README.md dist/
           Copy-Item third_party/rnnoise/COPYING dist/RNNOISE-LICENSE.txt
           $size = (Get-ChildItem dist -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
           Write-Output ("Package size: {0:N1} MB" -f $size)
-          Write-Output ("::notice::Windows package size: {0:N1} MB" -f $size)
+          $top = (Get-ChildItem dist -Recurse -File | Sort-Object Length -Descending | Select-Object -First 6 |
+            ForEach-Object { "{0} {1:N1}MB" -f $_.Name, ($_.Length / 1MB) }) -join ', '
+          Write-Output ("::notice::Windows package size: {0:N1} MB. Largest: {1}" -f $size, $top)
 
       - uses: actions/upload-artifact@v4
         with:
@@ -80,7 +92,7 @@ jobs:
     name: Linux (GCC, Qt 6 from Ubuntu)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install dependencies
         run: |
