@@ -2,7 +2,9 @@
 #include "PlaybackMixer.h"
 
 #include <QAudioSink>
+#include <QIODevice>
 #include <QMediaDevices>
+#include <QStringList>
 
 #include <algorithm>
 #include <cmath>
@@ -12,8 +14,9 @@ namespace lightcord::audio {
 
 namespace {
 constexpr int kRate = 48000;
-constexpr std::size_t kPrimeFrames = kRate / 1000 * 40;  // 40 ms
-constexpr std::size_t kMaxFrames = kRate / 1000 * 200;   // 200 ms
+constexpr int kTickMs = 10;
+constexpr int kDeviceTargetMs = 40;  // audio kept queued in the sound card
+constexpr int kDeviceBufferMs = 120; // device buffer capacity
 
 void writeSample(char *p, QAudioFormat::SampleFormat fmt, float v)
 {
@@ -44,8 +47,12 @@ void writeSample(char *p, QAudioFormat::SampleFormat fmt, float v)
 } // namespace
 
 PlaybackMixer::PlaybackMixer(QObject *parent)
-    : QIODevice(parent)
+    : QObject(parent)
+    , m_timer(this)
 {
+    m_timer.setTimerType(Qt::PreciseTimer);
+    m_timer.setInterval(kTickMs);
+    connect(&m_timer, &QTimer::timeout, this, &PlaybackMixer::pump);
 }
 
 PlaybackMixer::~PlaybackMixer()
@@ -70,107 +77,140 @@ bool PlaybackMixer::start(const QAudioDevice &device)
     m_pendingL.clear();
     m_pendingR.clear();
 
-    open(QIODevice::ReadOnly);
     m_sink = std::make_unique<QAudioSink>(dev, m_format);
-    m_sink->setBufferSize(m_format.bytesForDuration(60000));
-    m_sink->start(this);
+    m_sink->setBufferSize(m_format.bytesForDuration(kDeviceBufferMs * 1000));
+    m_io = m_sink->start();
+    if (!m_io) {
+        m_sink.reset();
+        return false;
+    }
+    m_clock.start();
+    pump(); // prefill with silence so the device starts immediately
+    m_timer.start();
     return true;
 }
 
 void PlaybackMixer::stop()
 {
+    m_timer.stop();
     if (m_sink) {
         m_sink->stop();
         m_sink.reset();
     }
-    if (isOpen())
-        close();
+    m_io = nullptr;
 }
 
 void PlaybackMixer::push(uint32_t source, const int16_t *stereo, std::size_t frames)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    Source &s = m_sources[source];
-    s.samples.insert(s.samples.end(), stereo, stereo + frames * 2);
-    const std::size_t buffered = s.samples.size() / 2;
-    if (buffered > kMaxFrames) {
-        const std::size_t drop = (buffered - kMaxFrames / 2) * 2;
-        s.samples.erase(s.samples.begin(), s.samples.begin() + static_cast<std::ptrdiff_t>(drop));
-    }
-    if (!s.primed && s.samples.size() / 2 >= kPrimeFrames)
-        s.primed = true;
+    m_sources[source].push(stereo, frames, m_clock.isValid() ? m_clock.elapsed() : 0);
 }
 
 void PlaybackMixer::removeSource(uint32_t source)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
     m_sources.erase(source);
 }
 
 void PlaybackMixer::clear()
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
     m_sources.clear();
 }
 
-void PlaybackMixer::mixInto(std::vector<int32_t> &acc, std::size_t frames)
+QString PlaybackMixer::stats() const
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    for (auto &entry : m_sources) {
-        Source &s = entry.second;
-        if (!s.primed)
-            continue;
-        const std::size_t available = std::min(frames, s.samples.size() / 2);
-        for (std::size_t i = 0; i < available * 2; ++i)
-            acc[i] += s.samples[i];
-        s.samples.erase(s.samples.begin(), s.samples.begin() + static_cast<std::ptrdiff_t>(available * 2));
-        if (s.samples.empty())
-            s.primed = false; // underrun: re-buffer before playing again
+    QStringList parts;
+    for (const auto &entry : m_sources) {
+        const JitterBuffer &jb = entry.second;
+        parts << QStringLiteral("ssrc %1: target %2ms, buffered %3ms, underruns %4, dropped %5ms")
+                     .arg(entry.first)
+                     .arg(jb.targetMs())
+                     .arg(jb.bufferedFrames() / 48)
+                     .arg(jb.underruns())
+                     .arg(jb.droppedFrames() / 48);
     }
+    return QStringLiteral("device underruns %1; %2").arg(m_deviceUnderruns).arg(parts.join(QStringLiteral(" | ")));
 }
 
-qint64 PlaybackMixer::readData(char *data, qint64 maxSize)
+void PlaybackMixer::render(std::size_t frames48k)
+{
+    std::vector<int32_t> acc(frames48k * 2, 0);
+    const int64_t now = m_clock.elapsed();
+    for (auto &entry : m_sources)
+        entry.second.mixInto(acc.data(), frames48k, now);
+
+    std::vector<float> l(frames48k), r(frames48k);
+    const float gain = m_muted ? 0.0f : m_volume / 32768.0f;
+    for (std::size_t i = 0; i < frames48k; ++i) {
+        l[i] = static_cast<float>(acc[2 * i]) * gain;
+        r[i] = static_cast<float>(acc[2 * i + 1]) * gain;
+    }
+    m_resampleL.process(l.data(), l.size(), m_pendingL);
+    m_resampleR.process(r.data(), r.size(), m_pendingR);
+}
+
+void PlaybackMixer::writePending()
 {
     const int channels = std::max(1, m_format.channelCount());
     const int bps = m_format.bytesPerSample();
-    const qint64 frameBytes = static_cast<qint64>(channels) * bps;
-    if (frameBytes <= 0 || maxSize < frameBytes)
-        return 0;
-    const std::size_t outFrames = static_cast<std::size_t>(maxSize / frameBytes);
-
-    // How many 48 kHz frames are needed to produce `outFrames` device frames.
-    const double ratio = static_cast<double>(kRate) / m_format.sampleRate();
-    std::size_t needed = outFrames > m_pendingL.size()
-                             ? static_cast<std::size_t>(std::ceil((outFrames - m_pendingL.size()) * ratio)) + 1
-                             : 0;
-
-    if (needed > 0) {
-        std::vector<int32_t> acc(needed * 2, 0);
-        mixInto(acc, needed);
-        std::vector<float> l(needed), r(needed);
-        const float gain = m_muted ? 0.0f : m_volume / 32768.0f;
-        for (std::size_t i = 0; i < needed; ++i) {
-            l[i] = static_cast<float>(acc[2 * i]) * gain;
-            r[i] = static_cast<float>(acc[2 * i + 1]) * gain;
-        }
-        m_resampleL.process(l.data(), l.size(), m_pendingL);
-        m_resampleR.process(r.data(), r.size(), m_pendingR);
-    }
-
-    const std::size_t frames = std::min(outFrames, std::min(m_pendingL.size(), m_pendingR.size()));
-    char *p = data;
+    const std::size_t frames = std::min(m_pendingL.size(), m_pendingR.size());
+    m_outBytes.resize(static_cast<qsizetype>(frames * channels * bps));
+    char *p = m_outBytes.data();
     for (std::size_t i = 0; i < frames; ++i) {
         const float left = m_pendingL[i];
         const float right = m_pendingR[i];
         for (int c = 0; c < channels; ++c) {
-            float v = channels == 1 ? 0.5f * (left + right) : (c == 0 ? left : (c == 1 ? right : 0.0f));
+            const float v = channels == 1 ? 0.5f * (left + right) : (c == 0 ? left : (c == 1 ? right : 0.0f));
             writeSample(p, m_format.sampleFormat(), v);
             p += bps;
         }
     }
-    m_pendingL.erase(m_pendingL.begin(), m_pendingL.begin() + static_cast<std::ptrdiff_t>(frames));
-    m_pendingR.erase(m_pendingR.begin(), m_pendingR.begin() + static_cast<std::ptrdiff_t>(frames));
-    return static_cast<qint64>(frames) * frameBytes;
+    const qint64 written = m_io->write(m_outBytes);
+    const qint64 bytesPerFrame = static_cast<qint64>(channels) * bps;
+    const std::size_t writtenFrames = written > 0 ? static_cast<std::size_t>(written / bytesPerFrame) : 0;
+    m_pendingL.erase(m_pendingL.begin(), m_pendingL.begin() + static_cast<std::ptrdiff_t>(writtenFrames));
+    m_pendingR.erase(m_pendingR.begin(), m_pendingR.begin() + static_cast<std::ptrdiff_t>(writtenFrames));
+}
+
+void PlaybackMixer::pump()
+{
+    if (!m_sink || !m_io)
+        return;
+
+    const qsizetype capacity = m_sink->bufferSize();
+    const qsizetype freeBytes = m_sink->bytesFree();
+    const qint64 queuedUs = m_format.durationForBytes(static_cast<qint32>(std::max<qsizetype>(0, capacity - freeBytes)));
+    if (queuedUs <= 0 && m_clock.elapsed() > 200)
+        ++m_deviceUnderruns;
+
+    const qint64 missingUs = static_cast<qint64>(kDeviceTargetMs) * 1000 - queuedUs;
+    if (missingUs <= 0)
+        return;
+
+    // Device frames still needed, minus what is already resampled and waiting.
+    const qint64 deviceFrames = m_format.framesForDuration(missingUs);
+    const qint64 alreadyPending = static_cast<qint64>(std::min(m_pendingL.size(), m_pendingR.size()));
+    const qint64 neededDevice = deviceFrames - alreadyPending;
+    if (neededDevice > 0) {
+        const double ratio = static_cast<double>(kRate) / m_format.sampleRate();
+        render(static_cast<std::size_t>(std::ceil(neededDevice * ratio)));
+    }
+
+    // Never write more than the device can take right now.
+    const int bytesPerFrame = std::max(1, m_format.bytesPerFrame());
+    const std::size_t maxFrames = static_cast<std::size_t>(m_sink->bytesFree() / bytesPerFrame);
+    if (m_pendingL.size() > maxFrames) {
+        // Keep the remainder for the next tick.
+        std::vector<float> keepL(m_pendingL.begin() + static_cast<std::ptrdiff_t>(maxFrames), m_pendingL.end());
+        std::vector<float> keepR(m_pendingR.begin() + static_cast<std::ptrdiff_t>(maxFrames), m_pendingR.end());
+        m_pendingL.resize(maxFrames);
+        m_pendingR.resize(maxFrames);
+        writePending();
+        keepL.insert(keepL.begin(), m_pendingL.begin(), m_pendingL.end());
+        keepR.insert(keepR.begin(), m_pendingR.begin(), m_pendingR.end());
+        m_pendingL.swap(keepL);
+        m_pendingR.swap(keepR);
+    } else {
+        writePending();
+    }
 }
 
 } // namespace lightcord::audio

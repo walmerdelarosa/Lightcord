@@ -2,27 +2,33 @@
 #pragma once
 
 #include "AudioPipeline.h"
+#include "JitterBuffer.h"
 
 #include <QAudioDevice>
 #include <QAudioFormat>
-#include <QIODevice>
+#include <QElapsedTimer>
+#include <QObject>
+#include <QString>
+#include <QTimer>
 
 #include <cstdint>
-#include <deque>
 #include <map>
 #include <memory>
-#include <mutex>
+#include <vector>
 
 class QAudioSink;
+class QIODevice;
 
 namespace lightcord::audio {
 
-// Mixes the decoded audio of every remote speaker (48 kHz interleaved
-// stereo int16, pushed per SSRC) and plays it on the output device in pull
-// mode. Each source has a small jitter buffer: playback of a source starts
-// once 40 ms are buffered and old audio is dropped beyond 200 ms, which keeps
-// latency bounded when the network bursts.
-class PlaybackMixer : public QIODevice {
+// Mixes the decoded audio of every remote speaker (48 kHz interleaved stereo
+// int16, pushed per SSRC) and plays it on the output device.
+//
+// Each speaker has an adaptive JitterBuffer. A precise 10 ms timer keeps the
+// device buffer topped up to ~40 ms in push mode, so the jitter buffers are
+// drained in small, regular steps (Qt's pull mode on Windows polls with the
+// coarse system timer and takes 30-45 ms chunks, which caused audible gaps).
+class PlaybackMixer : public QObject {
     Q_OBJECT
 public:
     explicit PlaybackMixer(QObject *parent = nullptr);
@@ -37,34 +43,30 @@ public:
     void setMuted(bool muted) { m_muted = muted; }
     void setVolume(float volume) { m_volume = volume; }
 
-    bool isSequential() const override { return true; }
-    // The mixer is an endless generator (it produces silence when nobody
-    // speaks). Qt's Windows audio sink only reads as many bytes as
-    // bytesAvailable() reports, so this must not return 0.
-    qint64 bytesAvailable() const override { return (qint64(1) << 24) + QIODevice::bytesAvailable(); }
-
-protected:
-    qint64 readData(char *data, qint64 maxSize) override;
-    qint64 writeData(const char *, qint64) override { return -1; }
+    // Summary for the diagnostics log.
+    QString stats() const;
 
 private:
-    struct Source {
-        std::deque<int16_t> samples; // interleaved stereo
-        bool primed = false;
-    };
+    void pump();
+    void render(std::size_t frames48k);
+    void writePending();
 
-    void mixInto(std::vector<int32_t> &acc, std::size_t frames);
-
-    std::mutex m_mutex;
-    std::map<uint32_t, Source> m_sources;
+    std::map<uint32_t, JitterBuffer> m_sources;
     std::unique_ptr<QAudioSink> m_sink;
+    QIODevice *m_io = nullptr;
     QAudioFormat m_format;
+    QTimer m_timer;
+    QElapsedTimer m_clock;
+
     LinearResampler m_resampleL;
     LinearResampler m_resampleR;
-    std::vector<float> m_pendingL; // resampled samples not yet delivered
+    std::vector<float> m_pendingL; // device-rate samples not yet written
     std::vector<float> m_pendingR;
+    QByteArray m_outBytes;
+
     bool m_muted = false;
     float m_volume = 1.0f;
+    int m_deviceUnderruns = 0;
 };
 
 } // namespace lightcord::audio

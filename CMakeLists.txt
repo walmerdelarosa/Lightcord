@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(Lightcord
-    VERSION 0.2.0
+    VERSION 0.2.1
     DESCRIPTION "A lightweight native Discord client"
     HOMEPAGE_URL "https://github.com/walmerdelarosa/Lightcord"
     LANGUAGES C CXX)
@@ -57,6 +57,8 @@ endif()
 add_library(lightcord_audio_core STATIC
     src/audio/NoiseSuppressor.cpp
     src/audio/NoiseSuppressor.h
+    src/audio/JitterBuffer.cpp
+    src/audio/JitterBuffer.h
 )
 target_include_directories(lightcord_audio_core PUBLIC src)
 target_link_libraries(lightcord_audio_core PUBLIC rnnoise)
@@ -230,6 +232,10 @@ if(LIGHTCORD_BUILD_TESTS)
     add_executable(test_noise_suppressor tests/test_noise_suppressor.cpp)
     target_link_libraries(test_noise_suppressor PRIVATE lightcord_audio_core)
     add_test(NAME noise_suppressor COMMAND test_noise_suppressor)
+
+    add_executable(test_jitter_buffer tests/test_jitter_buffer.cpp)
+    target_link_libraries(test_jitter_buffer PRIVATE lightcord_audio_core)
+    add_test(NAME jitter_buffer COMMAND test_jitter_buffer)
 
     if(LIGHTCORD_ENABLE_VOICE)
         add_executable(test_voice_core

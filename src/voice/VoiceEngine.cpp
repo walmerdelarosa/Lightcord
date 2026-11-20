@@ -634,6 +634,8 @@ void VoiceEngine::logStats()
           m_stats.datagrams, m_stats.ignored, m_stats.transportFailures, m_stats.unknownSender, m_stats.e2eeFailures,
           m_stats.opusFailures, m_stats.played, m_stats.sent, m_stats.sendBlocked,
           m_dave ? int(m_dave->activeProtocolVersion()) : -1, int(m_users.size()), int(m_ssrcByUser.size()));
+    if (m_playback)
+        qInfo("[voice] playback: %s", qPrintable(m_playback->stats()));
 }
 
 void VoiceEngine::checkRemoteSpeaking()
