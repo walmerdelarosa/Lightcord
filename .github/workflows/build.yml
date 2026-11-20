@@ -144,7 +144,9 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
+          # autoconf/automake/libtool: vcpkg builds libsodium with autotools on Linux
           sudo apt-get install -y --no-install-recommends ninja-build libgl1-mesa-dev pkg-config \
+            autoconf autoconf-archive automake libtool \
             qt6-base-dev qt6-websockets-dev qt6-multimedia-dev libqt6svg6-dev
 
       - name: Restore vcpkg binary cache
