@@ -80,7 +80,7 @@ jobs:
         run: |
           foreach ($log in 'configure.log', 'build.log') {
             if (Test-Path $log) {
-              Select-String -Path $log -Pattern 'error C\d+|error LNK\d+|fatal error|CMake Error|error:|failed with' |
+              Select-String -Path $log -Pattern 'error C\d+|error LNK\d+|fatal error|CMake Error|error:|failed with|FAILED:' |
                 Select-Object -First 40 |
                 ForEach-Object { Write-Output ("::error::" + $_.Line.Trim()) }
             }
@@ -181,7 +181,7 @@ jobs:
         if: failure()
         run: |
           for log in configure.log build.log; do
-            [ -f "$log" ] && grep -E "error:|undefined reference|CMake Error|failed with" "$log" | head -40 | sed 's/^/::error::/' || true
+            [ -f "$log" ] && grep -E "error:|undefined reference|multiple definition|relocation|cannot find|ld:|CMake Error|failed with|FAILED:" "$log" | cut -c1-400 | head -40 | sed 's/^/::error::/' || true
           done
           find "$RUNNER_TEMP/vcpkg/buildtrees" -name '*-err.log' 2>/dev/null | head -3 | while read f; do
             tail -15 "$f" | sed 's/^/::error::vcpkg: /'
