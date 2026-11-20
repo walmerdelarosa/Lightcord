@@ -1,0 +1,329 @@
+/* Lightcord base stylesheet. {{tokens}} are replaced by Theme::apply(). */
+
+* {
+    font-family: "Segoe UI Variable Text", "Segoe UI", "Inter", "Noto Sans", sans-serif;
+}
+
+QMainWindow, QDialog {
+    background: {{window}};
+    color: {{text}};
+}
+
+QWidget#Sidebar {
+    background: {{sidebar}};
+}
+
+QWidget#SidebarHeader {
+    background: {{sidebar}};
+    border-bottom: 1px solid {{border}};
+}
+
+QLabel#Wordmark {
+    color: {{textStrong}};
+    font-weight: 700;
+    font-size: 15px;
+}
+
+QLabel, QCheckBox, QRadioButton {
+    color: {{text}};
+}
+
+QLabel#Muted {
+    color: {{textMuted}};
+}
+
+QLabel#Warning {
+    color: {{danger}};
+}
+
+QLabel#Heading {
+    color: {{textStrong}};
+    font-size: 18px;
+    font-weight: 700;
+}
+
+QLineEdit, QPlainTextEdit, QComboBox, QSpinBox {
+    background: {{surface}};
+    color: {{text}};
+    border: 1px solid {{border}};
+    border-radius: 6px;
+    padding: 5px 8px;
+    selection-background-color: {{accent}};
+    selection-color: {{accentText}};
+}
+
+QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus {
+    border-color: {{accent}};
+}
+
+QComboBox QAbstractItemView {
+    background: {{surface}};
+    color: {{text}};
+    selection-background-color: {{selection}};
+    border: 1px solid {{border}};
+}
+
+QTreeWidget {
+    background: transparent;
+    border: none;
+    color: {{text}};
+    outline: 0;
+}
+
+QTreeWidget::item {
+    padding: 3px 2px;
+    border-radius: 4px;
+}
+
+QTreeWidget::item:hover {
+    background: {{surfaceHover}};
+}
+
+QTreeWidget::item:selected {
+    background: {{selection}};
+    color: {{textStrong}};
+}
+
+QTextBrowser#MessageView {
+    background: {{window}};
+    border: none;
+    padding: 4px 14px;
+}
+
+QWidget#ChannelHeader {
+    background: {{window}};
+    border-bottom: 1px solid {{border}};
+}
+
+QLabel#ChannelTitle {
+    color: {{textStrong}};
+    font-weight: 600;
+    font-size: 14px;
+}
+
+QLabel#ChannelTopic {
+    color: {{textMuted}};
+}
+
+QWidget#VoiceBar {
+    background: {{surface}};
+    border-top: 1px solid {{border}};
+}
+
+QLabel#UserName {
+    color: {{textStrong}};
+    font-weight: 600;
+}
+
+QLabel#UserStatus {
+    color: {{textMuted}};
+    font-size: 11px;
+}
+
+QWidget#SharePreview {
+    background: {{surface}};
+    border-top: 1px solid {{border}};
+}
+
+QLabel#LiveBadge {
+    background: {{danger}};
+    color: #FFFFFF;
+    border-radius: 3px;
+    padding: 1px 6px;
+    font-weight: 700;
+    font-size: 10px;
+}
+
+QToolButton {
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    padding: 5px;
+    color: {{text}};
+}
+
+QToolButton:hover {
+    background: {{surfaceHover}};
+}
+
+QToolButton:checked {
+    background: {{accentSoft}};
+}
+
+QToolButton#DangerToggle:checked {
+    background: {{dangerSoft}};
+}
+
+QPushButton {
+    background: {{surface}};
+    color: {{text}};
+    border: 1px solid {{border}};
+    border-radius: 6px;
+    padding: 6px 14px;
+}
+
+QPushButton:hover {
+    background: {{surfaceHover}};
+}
+
+QPushButton#Primary {
+    background: {{accent}};
+    color: {{accentText}};
+    border: none;
+    font-weight: 600;
+}
+
+QPushButton#Primary:hover {
+    background: {{accentHover}};
+}
+
+QPushButton#Danger {
+    background: {{danger}};
+    color: #FFFFFF;
+    border: none;
+    font-weight: 600;
+}
+
+QPushButton:disabled {
+    color: {{textMuted}};
+}
+
+QStatusBar {
+    background: {{sidebar}};
+    color: {{textMuted}};
+    border-top: 1px solid {{border}};
+}
+
+QStatusBar QLabel {
+    color: {{textMuted}};
+}
+
+QSplitter::handle {
+    background: {{border}};
+}
+
+QScrollBar:vertical {
+    background: transparent;
+    width: 10px;
+    margin: 0;
+}
+
+QScrollBar::handle:vertical {
+    background: {{border}};
+    border-radius: 4px;
+    min-height: 30px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: {{textMuted}};
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0;
+}
+
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: none;
+}
+
+QTabWidget::pane {
+    border: 1px solid {{border}};
+    border-radius: 6px;
+    top: -1px;
+}
+
+QTabBar::tab {
+    background: transparent;
+    color: {{textMuted}};
+    padding: 6px 14px;
+    border-bottom: 2px solid transparent;
+}
+
+QTabBar::tab:selected {
+    color: {{textStrong}};
+    border-bottom: 2px solid {{accent}};
+}
+
+QProgressBar {
+    background: {{surface}};
+    border: 1px solid {{border}};
+    border-radius: 4px;
+    max-height: 8px;
+    text-align: center;
+    color: transparent;
+}
+
+QProgressBar::chunk {
+    background: {{success}};
+    border-radius: 3px;
+}
+
+QProgressBar#VadMeter::chunk {
+    background: {{accent}};
+}
+
+QSlider::groove:horizontal {
+    height: 4px;
+    background: {{border}};
+    border-radius: 2px;
+}
+
+QSlider::handle:horizontal {
+    background: {{accent}};
+    width: 14px;
+    height: 14px;
+    margin: -5px 0;
+    border-radius: 7px;
+}
+
+QSlider::sub-page:horizontal {
+    background: {{accent}};
+    border-radius: 2px;
+}
+
+QGroupBox {
+    border: 1px solid {{border}};
+    border-radius: 6px;
+    margin-top: 14px;
+    padding-top: 8px;
+    color: {{textStrong}};
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 4px;
+}
+
+QMenu {
+    background: {{surface}};
+    color: {{text}};
+    border: 1px solid {{border}};
+}
+
+QMenu::item:selected {
+    background: {{selection}};
+}
+
+QToolTip {
+    background: {{surface}};
+    color: {{text}};
+    border: 1px solid {{border}};
+}
+
+QListWidget {
+    background: {{surface}};
+    border: 1px solid {{border}};
+    border-radius: 6px;
+    color: {{text}};
+}
+
+QListWidget::item {
+    padding: 6px;
+    border-radius: 6px;
+}
+
+QListWidget::item:selected {
+    background: {{selection}};
+    color: {{textStrong}};
+}

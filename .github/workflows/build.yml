@@ -1,0 +1,107 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows x64 (MSVC, Qt 6.8)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: 'qtmultimedia qtwebsockets'
+          cache: true
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake --build build > build.log 2>&1
+          $code = $LASTEXITCODE
+          Get-Content build.log
+          exit $code
+
+      - name: Report compiler errors
+        if: failure()
+        shell: pwsh
+        run: |
+          if (Test-Path build.log) {
+            Select-String -Path build.log -Pattern 'error C\d+|error LNK\d+|fatal error|CMake Error' |
+              Select-Object -First 40 |
+              ForEach-Object { Write-Output ("::error::" + $_.Line.Trim()) }
+          }
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item build/Lightcord.exe dist/
+          windeployqt --release --no-translations --no-system-d3d-compiler --no-opengl-sw dist/Lightcord.exe
+          # Lightcord uses the native Windows audio backend; drop the FFmpeg backend to stay small.
+          if (Test-Path dist/multimedia/windowsmediaplugin.dll) {
+            Remove-Item -ErrorAction SilentlyContinue dist/multimedia/ffmpegmediaplugin.dll
+            Get-ChildItem dist -Filter 'av*.dll' | Remove-Item
+            Get-ChildItem dist -Filter 'sw*.dll' | Remove-Item
+          }
+          Copy-Item LICENSE, README.md dist/
+          Copy-Item third_party/rnnoise/COPYING dist/RNNOISE-LICENSE.txt
+          $size = (Get-ChildItem dist -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
+          Write-Output ("Package size: {0:N1} MB" -f $size)
+          Write-Output ("::notice::Windows package size: {0:N1} MB" -f $size)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Lightcord-windows-x64
+          path: dist
+
+  linux:
+    name: Linux (GCC, Qt 6 from Ubuntu)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build libgl1-mesa-dev \
+            qt6-base-dev qt6-websockets-dev qt6-multimedia-dev libqt6svg6-dev
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: |
+          set -o pipefail
+          cmake --build build 2>&1 | tee build.log
+
+      - name: Report compiler errors
+        if: failure()
+        run: |
+          if [ -f build.log ]; then
+            grep -E "error:|undefined reference|CMake Error" build.log | head -40 | sed 's/^/::error::/' || true
+          fi
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
