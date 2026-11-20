@@ -63,9 +63,15 @@ binaries. It only borrows the philosophy.
 
 ## Download
 
-Pre-release builds for Windows x64 are produced by GitHub Actions for every commit:
-open the latest successful run of the [Build workflow](https://github.com/walmerdelarosa/Lightcord/actions/workflows/build.yml)
-and download the **Lightcord-windows-x64** artifact. Unzip it and run `Lightcord.exe`. No installer is needed.
+Get the latest build from the [Releases page](https://github.com/walmerdelarosa/Lightcord/releases):
+download `Lightcord-<version>-windows-x64.zip`, unzip it anywhere and run `Lightcord.exe`. No installer or
+administrator rights are needed. Every release also includes a `.sha256` file to verify the download.
+
+The executable is not code-signed yet, so Windows SmartScreen may show "Windows protected your PC" the first time:
+choose **More info → Run anyway**.
+
+Development builds of every commit are available as the **Lightcord-windows-x64** artifact of the
+[Build workflow](https://github.com/walmerdelarosa/Lightcord/actions/workflows/build.yml).
 
 ## Using voice
 
