@@ -46,7 +46,10 @@ VoiceEngine::VoiceEngine(QObject *parent)
     , m_discoveryTimer(this)
     , m_keepAliveTimer(this)
     , m_speakingTimer(this)
+    , m_statsTimer(this)
 {
+    m_statsTimer.setInterval(10000);
+    connect(&m_statsTimer, &QTimer::timeout, this, &VoiceEngine::logStats);
     // The timers are children so that moveToThread() takes them along.
     m_discoveryTimer.setInterval(1000);
     connect(&m_discoveryTimer, &QTimer::timeout, this, &VoiceEngine::sendIpDiscovery);
@@ -81,7 +84,9 @@ void VoiceEngine::start(const QString &endpoint, const QString &guildId, const Q
             m_gateway->sendJson(op, QJsonObject{{"transition_id", transitionId}});
     };
     cb.log = [](const std::string &msg) { qInfo("[voice] %s", msg.c_str()); };
+    DaveSession::setGlobalLogHandler([](const std::string &msg) { qWarning("%s", msg.c_str()); });
     cb.protocolChanged = [this](uint16_t version) {
+        qInfo("[voice] DAVE protocol now v%d", int(version));
         emit encryptionChanged(version, QString::fromLatin1(TransportCrypto::modeName(m_mode)));
     };
     m_dave = std::make_unique<DaveSession>(userId.toStdString(), channelId.toULongLong(), cb);
@@ -118,6 +123,8 @@ void VoiceEngine::stop()
     m_discoveryTimer.stop();
     m_keepAliveTimer.stop();
     m_speakingTimer.stop();
+    logStats();
+    m_statsTimer.stop();
     if (m_gateway) {
         m_gateway->close();
         m_gateway->deleteLater();
@@ -188,6 +195,8 @@ void VoiceEngine::reloadAudioSettings()
 
 void VoiceEngine::onReady(quint32 ssrc, const QString &ip, quint16 port, const QStringList &modes)
 {
+    qInfo("[voice] ready: ssrc=%u server=%s:%u modes=%s", ssrc, qPrintable(ip), port,
+          qPrintable(modes.join(QLatin1Char(','))));
     m_ssrc = ssrc;
     m_dave->setSelfSsrc(ssrc);
     m_serverAddress = QHostAddress(ip);
@@ -245,6 +254,9 @@ void VoiceEngine::onSessionDescription(const QString &mode, const QByteArray &ke
     startAudio();
     m_keepAliveTimer.start();
     m_speakingTimer.start();
+    m_stats = Stats{};
+    m_statsTimer.start();
+    qInfo("[voice] connected: ssrc=%u mode=%s dave=%d", m_ssrc, qPrintable(mode), daveVersion);
     emit connectedChanged(true);
     emit statusChanged(tr("Voice connected"));
     emit encryptionChanged(m_dave->activeProtocolVersion(), mode);
@@ -256,6 +268,8 @@ void VoiceEngine::onDaveJson(int op, const QJsonObject &d)
         return;
     const auto transitionId = static_cast<uint16_t>(d.value("transition_id").toInt());
     const auto version = static_cast<uint16_t>(d.value("protocol_version").toInt());
+    qInfo("[voice] DAVE op %d: transition=%d version=%d epoch=%.0f", op, transitionId, version,
+          d.value("epoch").toDouble());
     switch (op) {
     case DaveOp::PrepareTransition:
         m_dave->onPrepareTransition(transitionId, version);
@@ -277,6 +291,7 @@ void VoiceEngine::onDaveBinary(int op, const QByteArray &payload)
         return;
     const auto *p = reinterpret_cast<const uint8_t *>(payload.constData());
     const auto size = static_cast<std::size_t>(payload.size());
+    qInfo("[voice] DAVE binary op %d (%lld bytes)", op, static_cast<long long>(payload.size()));
     switch (op) {
     case DaveOp::MlsExternalSender:
         m_dave->onExternalSender(p, size);
@@ -302,6 +317,7 @@ void VoiceEngine::onSpeaking(const QString &userId, quint32 ssrc, int flags)
     Q_UNUSED(flags);
     if (userId.isEmpty() || userId == m_userId)
         return;
+    qInfo("[voice] speaking: user %s has SSRC %u", qPrintable(userId), ssrc);
     m_remotes[ssrc].userId = userId;
     m_ssrcByUser.insert(userId, ssrc);
     if (!m_users.contains(userId)) {
@@ -313,6 +329,7 @@ void VoiceEngine::onSpeaking(const QString &userId, quint32 ssrc, int flags)
 
 void VoiceEngine::onClientsConnected(const QStringList &userIds)
 {
+    qInfo("[voice] clients connected: %s", qPrintable(userIds.join(QLatin1Char(','))));
     for (const QString &id : userIds) {
         if (id == m_userId || m_users.contains(id))
             continue;
@@ -324,6 +341,7 @@ void VoiceEngine::onClientsConnected(const QStringList &userIds)
 
 void VoiceEngine::onClientDisconnected(const QString &userId)
 {
+    qInfo("[voice] client disconnected: %s", qPrintable(userId));
     m_users.remove(userId);
     if (m_dave)
         m_dave->removeUser(userId.toStdString());
@@ -458,8 +476,10 @@ void VoiceEngine::sendOpusPacket(const uint8_t *data, std::size_t size, bool isS
         // libdave receivers pass the 3-byte Opus silence frame through unencrypted.
         media.assign(data, data + size);
     } else if (!m_dave || !m_dave->encryptOpus(data, size, media)) {
+        ++m_stats.sendBlocked;
         return; // E2EE keys not ready yet: never send unprotected media
     }
+    ++m_stats.sent;
 
     uint8_t header[kRtpHeaderSize];
     writeRtpHeader(header, m_sequence, m_timestamp, m_ssrc);
@@ -513,17 +533,20 @@ void VoiceEngine::handleRtp(const QByteArray &datagram)
 {
     const auto *p = reinterpret_cast<const uint8_t *>(datagram.constData());
     const auto size = static_cast<std::size_t>(datagram.size());
+    ++m_stats.datagrams;
     RtpInfo info;
-    if (!parseRtp(p, size, info) || info.payloadType != kOpusPayloadType || info.ssrc == m_ssrc)
+    if (!parseRtp(p, size, info) || info.payloadType != kOpusPayloadType || info.ssrc == m_ssrc) {
+        ++m_stats.ignored;
         return;
+    }
 
     std::vector<uint8_t> media;
-    if (!m_crypto.open(p, size, info.unencryptedHeaderSize, info.extensionBodySize, media))
+    if (!m_crypto.open(p, size, info.unencryptedHeaderSize, info.extensionBodySize, media)) {
+        ++m_stats.transportFailures;
         return;
+    }
 
     Remote &remote = m_remotes[info.ssrc];
-    if (remote.userId.isEmpty())
-        return; // unknown sender: we cannot pick the right E2EE key yet
 
     // Drop late or duplicated packets; conceal small gaps.
     int gap = 0;
@@ -536,9 +559,38 @@ void VoiceEngine::handleRtp(const QByteArray &datagram)
     remote.lastSequence = info.sequence;
     remote.hasSequence = true;
 
-    std::vector<uint8_t> opus;
-    if (!m_dave || !m_dave->decryptOpus(remote.userId.toStdString(), media.data(), media.size(), opus))
+    if (!m_dave)
         return;
+
+    std::vector<uint8_t> opus;
+    bool decrypted = false;
+    if (!remote.userId.isEmpty()) {
+        decrypted = m_dave->decryptOpus(remote.userId.toStdString(), media.data(), media.size(), opus);
+    } else if (!m_dave->isEncrypted()) {
+        // No E2EE in this call: the payload is plain Opus whoever sent it.
+        decrypted = m_dave->decryptOpus(std::string(), media.data(), media.size(), opus);
+    } else {
+        // Audio arrived before Discord told us whose SSRC this is (opcode 5).
+        // Find the sender by trying the decryptors of users without an SSRC yet.
+        for (const QString &user : std::as_const(m_users)) {
+            if (m_ssrcByUser.contains(user))
+                continue;
+            if (m_dave->decryptOpus(user.toStdString(), media.data(), media.size(), opus)) {
+                remote.userId = user;
+                m_ssrcByUser.insert(user, info.ssrc);
+                qInfo("[voice] SSRC %u identified as user %s by decryption", info.ssrc, qPrintable(user));
+                decrypted = true;
+                break;
+            }
+        }
+        if (!decrypted)
+            ++m_stats.unknownSender;
+    }
+    if (!decrypted) {
+        if (!remote.userId.isEmpty())
+            ++m_stats.e2eeFailures;
+        return;
+    }
 
     const bool silence = opus.size() == sizeof kOpusSilenceFrame &&
                          std::memcmp(opus.data(), kOpusSilenceFrame, sizeof kOpusSilenceFrame) == 0;
@@ -551,7 +603,7 @@ void VoiceEngine::handleRtp(const QByteArray &datagram)
     }
 
     remote.lastPacket.restart();
-    if (!remote.speaking) {
+    if (!remote.speaking && !remote.userId.isEmpty()) {
         remote.speaking = true;
         emit speakingChanged(remote.userId, true);
     }
@@ -565,8 +617,23 @@ void VoiceEngine::handleRtp(const QByteArray &datagram)
         if (remote.decoder->conceal(pcm) > 0)
             m_playback->push(info.ssrc, pcm.data(), pcm.size() / 2);
     }
-    if (remote.decoder->decode(opus.data(), opus.size(), pcm) > 0)
+    if (remote.decoder->decode(opus.data(), opus.size(), pcm) > 0) {
         m_playback->push(info.ssrc, pcm.data(), pcm.size() / 2);
+        ++m_stats.played;
+    } else {
+        ++m_stats.opusFailures;
+    }
+}
+
+void VoiceEngine::logStats()
+{
+    if (m_phase != Phase::Connected)
+        return;
+    qInfo("[voice] rx: %llu datagrams, %llu ignored, %llu transport-fail, %llu unknown-sender, %llu e2ee-fail, "
+          "%llu opus-fail, %llu played | tx: %llu frames, %llu e2ee-pending | DAVE v%d, users=%d, mapped=%d",
+          m_stats.datagrams, m_stats.ignored, m_stats.transportFailures, m_stats.unknownSender, m_stats.e2eeFailures,
+          m_stats.opusFailures, m_stats.played, m_stats.sent, m_stats.sendBlocked,
+          m_dave ? int(m_dave->activeProtocolVersion()) : -1, int(m_users.size()), int(m_ssrcByUser.size()));
 }
 
 void VoiceEngine::checkRemoteSpeaking()

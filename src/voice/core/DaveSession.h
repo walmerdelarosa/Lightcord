@@ -61,6 +61,9 @@ public:
 
     static uint16_t maxProtocolVersion();
 
+    // Receives libdave warnings/errors and MLS failures (stderr by default).
+    static void setGlobalLogHandler(std::function<void(const std::string &)> handler);
+
     // Call membership (voice gateway opcodes 11 and 13).
     void addUser(const std::string &userId);
     void removeUser(const std::string &userId);

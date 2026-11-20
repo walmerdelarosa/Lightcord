@@ -13,18 +13,31 @@ constexpr uint16_t kInitTransitionId = 0;
 constexpr uint16_t kDisabledVersion = 0;
 constexpr uint64_t kNewGroupEpoch = 1;
 
+std::function<void(const std::string &)> &globalLogHandler()
+{
+    static std::function<void(const std::string &)> handler;
+    return handler;
+}
+
+void emitLog(const std::string &text)
+{
+    if (globalLogHandler())
+        globalLogHandler()(text);
+    else
+        std::fprintf(stderr, "%s\n", text.c_str());
+}
+
 void mlsFailure(const char *source, const char *reason, void *userData)
 {
-    auto *self = static_cast<DaveSession *>(userData);
-    (void)self;
-    std::fprintf(stderr, "[DAVE] MLS failure in %s: %s\n", source ? source : "?", reason ? reason : "?");
+    (void)userData;
+    emitLog(std::string("[DAVE] MLS failure in ") + (source ? source : "?") + ": " + (reason ? reason : "?"));
 }
 
 void logSink(DAVELoggingSeverity severity, const char *file, int line, const char *message)
 {
     if (severity < DAVE_LOGGING_SEVERITY_WARNING || severity == DAVE_LOGGING_SEVERITY_NONE)
         return;
-    std::fprintf(stderr, "[DAVE] %s:%d %s\n", file ? file : "", line, message ? message : "");
+    emitLog(std::string("[DAVE] ") + (file ? file : "") + ":" + std::to_string(line) + " " + (message ? message : ""));
 }
 
 struct KeyRatchet {
@@ -42,6 +55,11 @@ struct KeyRatchet {
     DAVEKeyRatchetHandle handle;
 };
 } // namespace
+
+void DaveSession::setGlobalLogHandler(std::function<void(const std::string &)> handler)
+{
+    globalLogHandler() = std::move(handler);
+}
 
 uint16_t DaveSession::maxProtocolVersion()
 {

@@ -38,6 +38,10 @@ public:
     void setVolume(float volume) { m_volume = volume; }
 
     bool isSequential() const override { return true; }
+    // The mixer is an endless generator (it produces silence when nobody
+    // speaks). Qt's Windows audio sink only reads as many bytes as
+    // bytesAvailable() reports, so this must not return 0.
+    qint64 bytesAvailable() const override { return (qint64(1) << 24) + QIODevice::bytesAvailable(); }
 
 protected:
     qint64 readData(char *data, qint64 maxSize) override;

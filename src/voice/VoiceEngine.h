@@ -84,6 +84,7 @@ private:
     void sendOpusPacket(const uint8_t *data, std::size_t size, bool alreadyFinal);
     void handleRtp(const QByteArray &datagram);
     void fail(const QString &reason);
+    void logStats();
 
     Phase m_phase = Phase::Idle;
     VoiceGateway *m_gateway = nullptr;
@@ -106,6 +107,12 @@ private:
     QTimer m_keepAliveTimer;
     quint32 m_keepAliveCounter = 0;
     QTimer m_speakingTimer;
+    QTimer m_statsTimer;
+
+    struct Stats {
+        unsigned long long datagrams = 0, ignored = 0, transportFailures = 0, unknownSender = 0,
+                           e2eeFailures = 0, opusFailures = 0, played = 0, sent = 0, sendBlocked = 0;
+    } m_stats;
 
     // Sending state
     std::vector<int16_t> m_pcmAccumulator; // mono 48 kHz

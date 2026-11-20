@@ -8,6 +8,9 @@
 #include <QAudioDevice>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDesktopServices>
+#include <QStandardPaths>
+#include <QUrl>
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QGroupBox>
@@ -333,6 +336,18 @@ QWidget *SettingsDialog::buildAdvancedTab()
     v->addWidget(mutedLabel(tr("Voice calls use Discord's DAVE end-to-end encryption: audio is encrypted on "
                                "your computer and can only be decrypted by the people in the call."),
                             page));
+    v->addSpacing(8);
+    auto *logs = new QPushButton(tr("Open log folder"), page);
+    v->addWidget(logs, 0, Qt::AlignLeft);
+    v->addWidget(mutedLabel(tr("If something does not work (for example, voice), the file lightcord.log in this "
+                               "folder helps to find out why. It never contains your token or messages."),
+                            page));
+    connect(logs, &QPushButton::clicked, this, []() {
+        const QString dir =
+            QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + QStringLiteral("/logs");
+        QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+    });
+
     v->addSpacing(16);
     auto *logout = new QPushButton(Theme::icon("logout", Theme::palette().danger), tr("Log out and forget token"), page);
     logout->setObjectName("Danger");
