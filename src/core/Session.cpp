@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include "Session.h"
 
+#include "MemoryStats.h"
+
 #include <QJsonArray>
 #include <QStringList>
 #include <QUrl>
@@ -345,6 +347,8 @@ void Session::handleReady(const QJsonObject &data)
 
     emit ready();
     emit guildsChanged();
+    qInfo("READY processed: %d guilds, %d users, %d private channels | memory: %s", int(m_guilds.size()),
+          int(m_users.size()), int(m_privateChannels.size()), qPrintable(memoryUsageSummary()));
 }
 
 void Session::onDispatch(const QString &event, const QJsonObject &data)

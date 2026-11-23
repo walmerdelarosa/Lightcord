@@ -52,6 +52,8 @@ void NoiseSuppressor::reset()
     // Prime the output FIFO with one frame of silence so that process()
     // can always return as many samples as it receives.
     m_outFifo.assign(kFrameSize, 0);
+    // Prime the look-ahead delay line with silence.
+    m_delay.assign(static_cast<std::size_t>(kFrameSize) * kLookaheadFrames, 0.0f);
     m_lastVad = 0.0f;
     m_gateGain = 1.0f;
     m_holdFramesLeft = 0;
@@ -61,29 +63,36 @@ void NoiseSuppressor::processFrame(const float *in, float *out)
 {
     const Settings &s = m_settings;
 
-    if (!s.enabled || !m_state) {
-        std::copy(in, in + kFrameSize, out);
-        m_lastVad = 1.0f;
-        m_gateGain = 1.0f;
-        return;
-    }
-
-    // RNNoise expects float samples in the int16 range.
-    float denoised[kFrameSize];
-    m_lastVad = rnnoise_process_frame(m_state, denoised, in);
-
-    // Voice gate with hold time and attack/release smoothing.
+    // 1. Denoise the newest frame and decide what the gate should do.
+    float mixed[kFrameSize];
     float targetGain = 1.0f;
-    if (s.voiceGate) {
-        const int holdFrames = s.gateHoldMs / 10;
-        if (m_lastVad >= s.gateThreshold) {
-            m_holdFramesLeft = holdFrames;
-        } else if (m_holdFramesLeft > 0) {
-            --m_holdFramesLeft;
+    if (!s.enabled || !m_state) {
+        std::copy(in, in + kFrameSize, mixed);
+        m_lastVad = 1.0f;
+        m_holdFramesLeft = 0;
+    } else {
+        // RNNoise expects float samples in the int16 range.
+        float denoised[kFrameSize];
+        m_lastVad = rnnoise_process_frame(m_state, denoised, in);
+
+        const float wet = s.strength;
+        const float dry = 1.0f - wet;
+        for (int i = 0; i < kFrameSize; ++i)
+            mixed[i] = wet * denoised[i] + dry * in[i];
+
+        // Voice gate with hold time.
+        if (s.voiceGate) {
+            const int holdFrames = s.gateHoldMs / 10;
+            if (m_lastVad >= s.gateThreshold) {
+                m_holdFramesLeft = holdFrames;
+            } else if (m_holdFramesLeft > 0) {
+                --m_holdFramesLeft;
+            }
+            targetGain = (m_lastVad >= s.gateThreshold || m_holdFramesLeft > 0) ? 1.0f : kGateFloor;
         }
-        targetGain = (m_lastVad >= s.gateThreshold || m_holdFramesLeft > 0) ? 1.0f : kGateFloor;
     }
 
+    // 2. Move the gain towards the target (attack/release smoothing).
     const float startGain = m_gateGain;
     float endGain = startGain;
     if (targetGain > startGain)
@@ -92,14 +101,16 @@ void NoiseSuppressor::processFrame(const float *in, float *out)
         endGain = std::max(targetGain, startGain - kGateRelease);
     m_gateGain = endGain;
 
-    const float wet = s.strength;
-    const float dry = 1.0f - wet;
+    // 3. Apply the gain to the oldest frame of the delay line, so the gate opens
+    //    kLookaheadFrames before the speech that triggered it.
+    m_delay.insert(m_delay.end(), mixed, mixed + kFrameSize);
     for (int i = 0; i < kFrameSize; ++i) {
         // Interpolate the gain across the frame to avoid clicks.
         const float t = static_cast<float>(i) / kFrameSize;
         const float gain = startGain + (endGain - startGain) * t;
-        out[i] = (wet * denoised[i] + dry * in[i]) * gain;
+        out[i] = m_delay[static_cast<std::size_t>(i)] * gain;
     }
+    m_delay.erase(m_delay.begin(), m_delay.begin() + kFrameSize);
 }
 
 void NoiseSuppressor::process(int16_t *samples, std::size_t count)

@@ -33,7 +33,9 @@ VoiceSession::VoiceSession(Gateway *gateway, QObject *parent)
         emit errorOccurred(reason);
         leave();
     });
-    m_thread.start();
+    // Above normal priority, so that a busy UI or other programs do not delay
+    // the 10 ms playback ticks and the 20 ms microphone frames.
+    m_thread.start(QThread::HighestPriority);
 
     connect(&Settings::instance(), &Settings::noiseSuppressionChanged, this, &VoiceSession::reloadAudioSettings);
     connect(&Settings::instance(), &Settings::audioDevicesChanged, this, &VoiceSession::reloadAudioSettings);

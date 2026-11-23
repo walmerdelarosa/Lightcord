@@ -158,6 +158,7 @@ if(LIGHTCORD_BUILD_APP)
         src/core/TokenStore.cpp        src/core/TokenStore.h
         src/core/Settings.cpp          src/core/Settings.h
         src/core/MessageFormatter.cpp  src/core/MessageFormatter.h
+        src/core/MemoryStats.cpp       src/core/MemoryStats.h
         src/audio/AudioPipeline.cpp    src/audio/AudioPipeline.h
         src/audio/PlaybackMixer.cpp    src/audio/PlaybackMixer.h
         src/screenshare/ScreenCapturer.cpp src/screenshare/ScreenCapturer.h
@@ -202,7 +203,7 @@ if(LIGHTCORD_BUILD_APP)
 
     if(WIN32)
         target_sources(Lightcord PRIVATE resources/windows/lightcord.rc)
-        target_link_libraries(Lightcord PRIVATE advapi32 user32 gdi32 dwmapi)
+        target_link_libraries(Lightcord PRIVATE advapi32 user32 gdi32 dwmapi psapi winmm)
         target_compile_definitions(Lightcord PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
     endif()
 

@@ -102,7 +102,7 @@ int main()
                 break;
             }
         }
-        check(same, "disabled suppressor passes audio through with 10 ms delay");
+        check(same, "disabled suppressor passes audio through with a constant delay");
     }
 
     // 4. Odd chunk sizes never change the buffer length or crash.
