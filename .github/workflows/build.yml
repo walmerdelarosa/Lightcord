@@ -17,6 +17,8 @@ jobs:
   windows:
     name: Windows x64 (MSVC, Qt 6.8)
     runs-on: windows-latest
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
     env:
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.vcpkg-cache
     steps:
@@ -129,7 +131,9 @@ jobs:
             ForEach-Object { "{0} {1:N1}MB" -f $_.Name, ($_.Length / 1MB) }) -join ', '
           Write-Output ("::notice::Windows package size: {0:N1} MB. Largest: {1}" -f $size, $top)
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload unsigned package
+        id: upload
+        uses: actions/upload-artifact@v4
         with:
           name: Lightcord-windows-x64
           path: dist
@@ -197,15 +201,17 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
-  release:
-    # Publishes a release when main reaches a version (project(VERSION) in CMakeLists.txt)
-    # that has notes in docs/release-notes/v<version>.md and no GitHub release yet.
-    name: Publish GitHub release
+  plan:
+    # Decides whether this push publishes a release: main reaches a version
+    # (project(VERSION) in CMakeLists.txt) that has notes in docs/release-notes/v<version>.md
+    # and no GitHub release yet.
+    name: Plan release
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-    needs: [windows, linux]
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      publish: ${{ steps.plan.outputs.publish }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -228,32 +234,100 @@ jobs:
             echo "publish=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/download-artifact@v4
-        if: steps.plan.outputs.publish == 'true'
+  sign:
+    # Signs Lightcord.exe through SignPath (free code signing for open source, certificate by
+    # SignPath Foundation). Runs only for releases, and only once the repository variable
+    # SIGNPATH_ORGANIZATION_ID and the secret SIGNPATH_API_TOKEN exist (see docs/CODE_SIGNING.md).
+    # Every request waits for manual approval in SignPath.
+    name: Sign Windows package (SignPath)
+    needs: [plan, windows, linux]
+    if: needs.plan.outputs.publish == 'true' && vars.SIGNPATH_ORGANIZATION_ID != ''
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      actions: read # lets SignPath download the unsigned artifact of this run
+    steps:
+      - name: Submit signing request and wait for approval
+        uses: signpath/github-action-submit-signing-request@v3
         with:
-          name: Lightcord-windows-x64
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'Lightcord' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }} # empty: the project's default
+          github-artifact-id: ${{ needs.windows.outputs.artifact-id }}
+          parameters: |
+            version: "${{ needs.plan.outputs.version }}"
+          wait-for-completion: true
+          # Time for an approver to approve the request in SignPath.
+          wait-for-completion-timeout-in-seconds: 7200
+          output-artifact-directory: signed
+
+      - name: Verify signature
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature signed/Lightcord.exe
+          Write-Output ("Status: {0}; signer: {1}" -f $sig.Status, $sig.SignerCertificate.Subject)
+          if ($sig.Status -ne 'Valid') {
+            Write-Output "::error::Lightcord.exe is not validly signed ($($sig.Status))"
+            exit 1
+          }
+          $info = (Get-Item signed/Lightcord.exe).VersionInfo
+          if ($info.ProductName -ne 'Lightcord' -or $info.ProductVersion -ne '${{ needs.plan.outputs.version }}') {
+            Write-Output "::error::Unexpected metadata: $($info.ProductName) $($info.ProductVersion)"
+            exit 1
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Lightcord-windows-x64-signed
+          path: signed
+
+  release:
+    name: Publish GitHub release
+    needs: [plan, windows, linux, sign]
+    # Publishes a signed package when SignPath is configured, and the unsigned one otherwise.
+    # A failed or rejected signing request stops the release instead of falling back.
+    if: >-
+      always() && needs.plan.outputs.publish == 'true' &&
+      needs.windows.result == 'success' && needs.linux.result == 'success' &&
+      (needs.sign.result == 'success' || needs.sign.result == 'skipped')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.sign.result == 'success' && 'Lightcord-windows-x64-signed' || 'Lightcord-windows-x64' }}
           path: package
 
       - name: Create ZIP and checksum
-        if: steps.plan.outputs.publish == 'true'
         run: |
-          DIR="Lightcord-${{ steps.plan.outputs.version }}"
+          DIR="Lightcord-${{ needs.plan.outputs.version }}"
           ZIP="${DIR}-windows-x64.zip"
           mv package "$DIR"
           zip -qr9 "$ZIP" "$DIR"
           sha256sum "$ZIP" > "$ZIP.sha256"
           cat "$ZIP.sha256"
           echo "ZIP=$ZIP" >> "$GITHUB_ENV"
+          if [ "${{ needs.sign.result }}" = "success" ]; then
+            echo "::notice::Publishing the SignPath-signed package."
+          else
+            echo "::warning::SignPath is not configured: publishing an unsigned package."
+          fi
 
       - name: Publish release
-        if: steps.plan.outputs.publish == 'true'
         run: |
-          TAG="${{ steps.plan.outputs.tag }}"
+          TAG="${{ needs.plan.outputs.tag }}"
           PRERELEASE=""
           case "$TAG" in v0.*|*-alpha*|*-beta*|*-rc*) PRERELEASE="--prerelease" ;; esac
           gh release create "$TAG" "$ZIP" "$ZIP.sha256" \
             --target "$GITHUB_SHA" \
-            --title "Lightcord ${{ steps.plan.outputs.version }}" \
+            --title "Lightcord ${{ needs.plan.outputs.version }}" \
             --notes-file "docs/release-notes/${TAG}.md" \
             $PRERELEASE
           echo "::notice::Published $(gh release view "$TAG" --json url --jq .url)"

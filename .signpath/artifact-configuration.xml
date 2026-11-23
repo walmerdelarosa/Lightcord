@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SignPath artifact configuration for Lightcord (paste it into the SignPath project).
+  The GitHub artifact "Lightcord-windows-x64" arrives as a ZIP. Only Lightcord.exe is
+  built from this repository, so it is the only file signed. The Qt and MSVC runtime
+  DLLs next to it are third-party binaries and are left as they are.
+  product-name and product-version make SignPath reject a binary whose metadata does
+  not match the release being signed.
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <!-- Set by the workflow. The default never matches a real build, so a missing
+         parameter makes the version check fail instead of passing silently. -->
+    <parameter name="version" default-value="0.0.0" />
+  </parameters>
+  <zip-file>
+    <pe-file path="Lightcord.exe" product-name="Lightcord" product-version="${version}">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

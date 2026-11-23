@@ -15,6 +15,10 @@
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license">
 </p>
 
+<p align="center">
+  <a href="CODE_SIGNING_POLICY.md">Code signing policy</a>
+</p>
+
 ---
 
 > [!WARNING]
@@ -67,8 +71,10 @@ Get the latest build from the [Releases page](https://github.com/walmerdelarosa/
 download `Lightcord-<version>-windows-x64.zip`, unzip it anywhere and run `Lightcord.exe`. No installer or
 administrator rights are needed. Every release also includes a `.sha256` file to verify the download.
 
-The executable is not code-signed yet, so Windows SmartScreen may show "Windows protected your PC" the first time:
-choose **More info → Run anyway**.
+Releases are being prepared for code signing through SignPath Foundation (see the
+[code signing policy](CODE_SIGNING_POLICY.md)). Until then the executable is unsigned, so Windows SmartScreen may show
+"Windows protected your PC" the first time: choose **More info → Run anyway**. Even signed releases can show this
+warning for a while, until SmartScreen has seen enough downloads.
 
 Development builds of every commit are available as the **Lightcord-windows-x64** artifact of the
 [Build workflow](https://github.com/walmerdelarosa/Lightcord/actions/workflows/build.yml).
