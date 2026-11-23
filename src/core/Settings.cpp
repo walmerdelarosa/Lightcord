@@ -64,6 +64,18 @@ audio::NoiseSuppressor::Settings Settings::noiseSuppression() const
     s.voiceGate = q.value("audio/ns/voiceGate", s.voiceGate).toBool();
     s.gateThreshold = q.value("audio/ns/gateThreshold", s.gateThreshold).toFloat();
     s.gateHoldMs = q.value("audio/ns/gateHoldMs", s.gateHoldMs).toInt();
+
+    // 0.2.0 saved its default hold time (200 ms) as soon as the settings dialog was
+    // used. It closed the gate between syllables, so a hold that still has exactly
+    // that value is moved to the current default once.
+    if (q.value("audio/ns/revision", 1).toInt() < 2) {
+        const audio::NoiseSuppressor::Settings defaults;
+        if (q.contains("audio/ns/gateHoldMs") && s.gateHoldMs == 200) {
+            s.gateHoldMs = defaults.gateHoldMs;
+            q.setValue("audio/ns/gateHoldMs", s.gateHoldMs);
+        }
+        q.setValue("audio/ns/revision", 2);
+    }
     return s;
 }
 
@@ -75,6 +87,7 @@ void Settings::setNoiseSuppression(const audio::NoiseSuppressor::Settings &s)
     q.setValue("audio/ns/voiceGate", s.voiceGate);
     q.setValue("audio/ns/gateThreshold", s.gateThreshold);
     q.setValue("audio/ns/gateHoldMs", s.gateHoldMs);
+    q.setValue("audio/ns/revision", 2);
     emit noiseSuppressionChanged();
 }
 

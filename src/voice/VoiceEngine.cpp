@@ -4,6 +4,7 @@
 #include "VoiceGateway.h"
 #include "audio/AudioPipeline.h"
 #include "audio/PlaybackMixer.h"
+#include "core/MemoryStats.h"
 #include "core/Settings.h"
 #include "voice/core/DaveSession.h"
 #include "voice/core/IpDiscovery.h"
@@ -17,6 +18,11 @@
 #include <cmath>
 #include <cstring>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#include <timeapi.h>
+#endif
+
 namespace lightcord {
 
 using namespace voice;
@@ -27,7 +33,10 @@ constexpr int kKeepAliveMs = 5000;
 constexpr int kSilenceFramesOnStop = 5;
 constexpr int kRemoteSpeakingTimeoutMs = 300;
 constexpr double kVoiceRmsThreshold = 0.0035; // about -49 dBFS, used when the voice gate is off
-constexpr int kVoiceHoldFrames = 15;          // 300 ms
+// Keep transmitting (gated silence) this long after the last voiced frame. Short pauses
+// between words then never stop and restart the stream, which made the receivers'
+// jitter buffers start over and clipped the next syllable.
+constexpr int kTransmitHoldFrames = 25; // 500 ms
 
 QAudioDevice findDevice(const QList<QAudioDevice> &devices, const QByteArray &id)
 {
@@ -117,8 +126,8 @@ void VoiceEngine::start(const QString &endpoint, const QString &guildId, const Q
 void VoiceEngine::stop()
 {
     const bool wasActive = m_phase != Phase::Idle;
-    if (m_transmitting && m_phase == Phase::Connected)
-        setTransmitting(false);
+    if (m_phase == Phase::Connected)
+        finishTransmission();
     stopAudio();
     m_discoveryTimer.stop();
     m_keepAliveTimer.stop();
@@ -145,6 +154,8 @@ void VoiceEngine::stop()
     m_dave.reset();
     m_pcmAccumulator.clear();
     m_transmitting = false;
+    m_silenceFramesLeft = 0;
+    m_holdFrames = 0;
     m_phase = Phase::Idle;
     if (wasActive) {
         emit connectedChanged(false);
@@ -255,6 +266,7 @@ void VoiceEngine::onSessionDescription(const QString &mode, const QByteArray &ke
     m_keepAliveTimer.start();
     m_speakingTimer.start();
     m_stats = Stats{};
+    m_connectedClock.start();
     m_statsTimer.start();
     qInfo("[voice] connected: ssrc=%u mode=%s dave=%d", m_ssrc, qPrintable(mode), daveVersion);
     emit connectedChanged(true);
@@ -361,6 +373,12 @@ void VoiceEngine::onClientDisconnected(const QString &userId)
 void VoiceEngine::startAudio()
 {
     stopAudio();
+#ifdef Q_OS_WIN
+    // Windows timers default to a 15.6 ms resolution, too coarse for the 10 ms
+    // playback pump and the 20 ms frames: request 1 ms while the call lasts.
+    if (!m_timerResolutionRaised)
+        m_timerResolutionRaised = timeBeginPeriod(1) == TIMERR_NOERROR;
+#endif
     const auto ns = Settings::instance().noiseSuppression();
     m_useGate = ns.enabled && ns.voiceGate;
 
@@ -390,6 +408,12 @@ void VoiceEngine::stopAudio()
         m_playback->deleteLater();
         m_playback = nullptr;
     }
+#ifdef Q_OS_WIN
+    if (m_timerResolutionRaised) {
+        timeEndPeriod(1);
+        m_timerResolutionRaised = false;
+    }
+#endif
 }
 
 void VoiceEngine::onCaptureLevels(float, float, float, bool gateOpen)
@@ -416,28 +440,54 @@ void VoiceEngine::processFrame(const int16_t *mono)
     if (m_phase != Phase::Connected)
         return;
 
-    bool voiceDetected = m_gateOpen;
+    // The RTP timestamp follows the capture clock: it advances for every 20 ms of
+    // audio, sent or not. Receivers (WebRTC NetEq in the official client) use it to
+    // tell real silence from network delay; freezing it during pauses made them
+    // see every pause as huge jitter and stretch or cut our audio.
+    const quint32 timestamp = m_timestamp;
+    m_timestamp += kFrameSamples;
+    ++m_stats.captured;
+
+    bool voiceNow = m_gateOpen;
     if (!m_useGate) {
         double acc = 0.0;
         for (int i = 0; i < kFrameSamples; ++i) {
             const double v = mono[i] / 32768.0;
             acc += v * v;
         }
-        if (std::sqrt(acc / kFrameSamples) > kVoiceRmsThreshold)
-            m_holdFrames = kVoiceHoldFrames;
-        else if (m_holdFrames > 0)
-            --m_holdFrames;
-        voiceDetected = m_holdFrames > 0;
+        voiceNow = std::sqrt(acc / kFrameSamples) > kVoiceRmsThreshold;
     }
+    if (voiceNow)
+        m_holdFrames = kTransmitHoldFrames;
+    else if (m_holdFrames > 0)
+        --m_holdFrames;
 
-    const bool active = !m_selfMute && !m_selfDeaf && voiceDetected;
+    const bool active = !m_selfMute && !m_selfDeaf && (voiceNow || m_holdFrames > 0);
     if (!active) {
-        if (m_transmitting)
-            setTransmitting(false);
+        if (m_transmitting) {
+            // Five frames of silence, paced at the normal 20 ms rate, avoid Opus
+            // interpolation artefacts on the receivers; opcode 5 (off) follows them.
+            m_transmitting = false;
+            m_silenceFramesLeft = kSilenceFramesOnStop;
+            emit speakingChanged(m_userId, false);
+        }
+        if (m_silenceFramesLeft > 0) {
+            sendOpusPacket(kOpusSilenceFrame, sizeof kOpusSilenceFrame, true, timestamp);
+            if (--m_silenceFramesLeft == 0)
+                m_gateway->sendSpeaking(0, m_ssrc);
+        }
         return;
     }
-    if (!m_transmitting)
-        setTransmitting(true);
+
+    if (!m_transmitting) {
+        // Opcode 5 must be sent before any audio. If we were still sending the
+        // trailing silence, Discord still has us as speaking: just carry on.
+        if (m_silenceFramesLeft == 0)
+            m_gateway->sendSpeaking(1, m_ssrc);
+        m_silenceFramesLeft = 0;
+        m_transmitting = true;
+        emit speakingChanged(m_userId, true);
+    }
 
     int16_t stereo[kFrameSamples * kChannels];
     for (int i = 0; i < kFrameSamples; ++i) {
@@ -446,27 +496,29 @@ void VoiceEngine::processFrame(const int16_t *mono)
     }
     std::vector<uint8_t> opus;
     if (m_encoder.encode(stereo, opus))
-        sendOpusPacket(opus.data(), opus.size(), false);
+        sendOpusPacket(opus.data(), opus.size(), false, timestamp);
 }
 
-void VoiceEngine::setTransmitting(bool on)
+void VoiceEngine::finishTransmission()
 {
-    if (on == m_transmitting)
-        return;
-    m_transmitting = on;
-    if (on) {
-        // Opcode 5 must be sent before any audio.
-        m_gateway->sendSpeaking(1, m_ssrc);
-    } else {
-        // Five frames of silence avoid Opus interpolation artefacts on the receivers.
-        for (int i = 0; i < kSilenceFramesOnStop; ++i)
-            sendOpusPacket(kOpusSilenceFrame, sizeof kOpusSilenceFrame, true);
-        m_gateway->sendSpeaking(0, m_ssrc);
+    // Leaving the call: send whatever trailing silence is still due at once.
+    if (m_transmitting) {
+        m_transmitting = false;
+        m_silenceFramesLeft = kSilenceFramesOnStop;
+        emit speakingChanged(m_userId, false);
     }
-    emit speakingChanged(m_userId, on);
+    if (m_silenceFramesLeft == 0)
+        return;
+    while (m_silenceFramesLeft > 0) {
+        sendOpusPacket(kOpusSilenceFrame, sizeof kOpusSilenceFrame, true, m_timestamp);
+        m_timestamp += kFrameSamples;
+        --m_silenceFramesLeft;
+    }
+    if (m_gateway)
+        m_gateway->sendSpeaking(0, m_ssrc);
 }
 
-void VoiceEngine::sendOpusPacket(const uint8_t *data, std::size_t size, bool isSilence)
+void VoiceEngine::sendOpusPacket(const uint8_t *data, std::size_t size, bool isSilence, quint32 timestamp)
 {
     if (!m_udp || !m_crypto.ready())
         return;
@@ -482,14 +534,13 @@ void VoiceEngine::sendOpusPacket(const uint8_t *data, std::size_t size, bool isS
     ++m_stats.sent;
 
     uint8_t header[kRtpHeaderSize];
-    writeRtpHeader(header, m_sequence, m_timestamp, m_ssrc);
+    writeRtpHeader(header, m_sequence, timestamp, m_ssrc);
     std::vector<uint8_t> packet;
     if (m_crypto.seal(header, sizeof header, media.data(), media.size(), packet)) {
         m_udp->writeDatagram(reinterpret_cast<const char *>(packet.data()), static_cast<qint64>(packet.size()),
                              m_serverAddress, m_serverPort);
     }
     ++m_sequence;
-    m_timestamp += kFrameSamples;
 }
 
 void VoiceEngine::sendKeepAlive()
@@ -634,6 +685,15 @@ void VoiceEngine::logStats()
           m_stats.datagrams, m_stats.ignored, m_stats.transportFailures, m_stats.unknownSender, m_stats.e2eeFailures,
           m_stats.opusFailures, m_stats.played, m_stats.sent, m_stats.sendBlocked,
           m_dave ? int(m_dave->activeProtocolVersion()) : -1, int(m_users.size()), int(m_ssrcByUser.size()));
+    // Captured audio should match wall-clock time. A clear shortfall means the
+    // microphone buffer overflowed (the voice thread was too busy) and audio was lost.
+    if (m_connectedClock.isValid()) {
+        const qint64 wallMs = m_connectedClock.elapsed();
+        const qint64 capturedMs = static_cast<qint64>(m_stats.captured) * 20;
+        qInfo("[voice] capture: %lld ms of audio in %lld ms (%.1f%%)", capturedMs, wallMs,
+              wallMs > 0 ? 100.0 * static_cast<double>(capturedMs) / static_cast<double>(wallMs) : 0.0);
+    }
+    qInfo("[voice] memory: %s", qPrintable(memoryUsageSummary()));
     if (m_playback)
         qInfo("[voice] playback: %s", qPrintable(m_playback->stats()));
 }

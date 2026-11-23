@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Lightcord - a lightweight native Discord client.
 
+#include "core/MemoryStats.h"
 #include "core/Settings.h"
 #include "ui/MainWindow.h"
 #include "ui/Theme.h"
@@ -84,6 +85,7 @@ int main(int argc, char *argv[])
     lightcord::MainWindow window;
     window.show();
     QTimer::singleShot(0, &window, &lightcord::MainWindow::startup);
+    QTimer::singleShot(0, []() { qInfo("Window shown | memory: %s", qPrintable(lightcord::memoryUsageSummary())); });
 
     return app.exec();
 }

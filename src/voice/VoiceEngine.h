@@ -80,8 +80,8 @@ private:
     void onCapturedAudio(const QByteArray &pcm);
     void onCaptureLevels(float in, float out, float vad, bool gateOpen);
     void processFrame(const int16_t *mono);
-    void setTransmitting(bool on);
-    void sendOpusPacket(const uint8_t *data, std::size_t size, bool alreadyFinal);
+    void finishTransmission();
+    void sendOpusPacket(const uint8_t *data, std::size_t size, bool isSilence, quint32 timestamp);
     void handleRtp(const QByteArray &datagram);
     void fail(const QString &reason);
     void logStats();
@@ -111,19 +111,23 @@ private:
 
     struct Stats {
         unsigned long long datagrams = 0, ignored = 0, transportFailures = 0, unknownSender = 0,
-                           e2eeFailures = 0, opusFailures = 0, played = 0, sent = 0, sendBlocked = 0;
+                           e2eeFailures = 0, opusFailures = 0, played = 0, sent = 0, sendBlocked = 0,
+                           captured = 0;
     } m_stats;
+    QElapsedTimer m_connectedClock;
 
     // Sending state
     std::vector<int16_t> m_pcmAccumulator; // mono 48 kHz
     quint16 m_sequence = 0;
-    quint32 m_timestamp = 0;
+    quint32 m_timestamp = 0; // advances with the capture clock, see processFrame()
     bool m_selfMute = false;
     bool m_selfDeaf = false;
     bool m_transmitting = false;
     bool m_gateOpen = true;
     bool m_useGate = true;
     int m_holdFrames = 0;
+    int m_silenceFramesLeft = 0; // trailing silence frames still to send
+    bool m_timerResolutionRaised = false; // timeBeginPeriod(1) active (Windows)
 
     // Receiving state
     struct Remote {

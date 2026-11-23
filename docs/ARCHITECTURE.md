@@ -39,12 +39,14 @@ under 1 ms.
 
 `NoiseSuppressor` is deliberately **Qt-free**, so it can be unit-tested (`tests/`) and reused by the
 future voice engine. It accepts 48 kHz mono `int16` chunks of any size, buffers them into RNNoise's
-480-sample frames, and always returns exactly as many samples as it receives (constant 10 ms latency).
+480-sample frames, and always returns exactly as many samples as it receives (constant latency: 10 ms of
+frame buffering plus 30 ms of look-ahead for the voice gate).
 On top of RNNoise it adds:
 
 - **Strength:** a wet/dry mix between the denoised and the original signal.
 - **Voice gate:** uses RNNoise's voice-activity probability, with a hold time and attack/release
-  ramps (interpolated per sample) so that the gate never clicks.
+  ramps (interpolated per sample) so that the gate never clicks. The decision is taken on the newest
+  frame and applied to audio delayed by three frames, so word onsets are not clipped.
 
 `AudioPipeline` connects a `QAudioSource` to the suppressor. It accepts whatever format the device
 prefers (8/16/32-bit integer or float, any channel count, any sample rate). It down-mixes to mono,
